@@ -1,0 +1,451 @@
+(base) komalgulati@Komals-MacBook-Pro codes % python iterate.py
+Starting pure continuous budget allocation analysis...
+Loading and preparing data...
+Loaded 127 candidate locations from composite scores CSV
+Loaded 159 existing facilities
+Filtered out 0 facilities with missing, empty, or '0' names
+Remaining candidate locations: 127
+Filtered out 0 inappropriate facility types (DMV, License, etc.)
+Remaining candidate locations after type filtering: 127
+Calculating proximity to existing facilities for no_service scenario...
+Calculating development costs...
+Using 'capacity_value' field from CSV for cost calculations
+Calculating costs based on capacity_value field
+Capacity range: 1 to 2403 spaces
+No-service costs calculated (no clipping applied)
+  Range: $210,000 to $24,230,000
+Full-service costs calculated (no clipping applied)
+  Range: $7,067,000 to $168,001,000
+Cost calculation completed using capacity_value
+Costs now vary by facility capacity:
+  No-service: $0.210M to $24.230M
+  Full-service: $7.067M to $168.001M
+
+=== RUNNING CONTINUOUS BUDGET ALLOCATION UP TO $175.0M ===
+
+Starting continuous budget allocation for no_service scenario up to $175.0M
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #1: Selected DOT GENERAL LARGE ROW TRACTS (FID 4331)
+  Cost: $10.340M, Cumulative: $10.340M
+  Capacity: 1014, Cumulative: 1014
+  Location: (-8806391.587772, 4108827.559316)
+  Composite Score: 0.6191
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #2: Selected DOT METROLINA REGIONAL TRAFFIC MANAGEMENT CENTER (FID 2977)
+  Cost: $2.720M, Cumulative: $13.060M
+  Capacity: 252, Cumulative: 1266
+  Location: (-8999270.798658, 4200551.491080)
+  Composite Score: 0.5232
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #3: Selected STATE PORTS AUTHORITY-INLAND CONTAINER TERMINAL (FID 678)
+  Cost: $4.860M, Cumulative: $17.920M
+  Capacity: 466, Cumulative: 1732
+  Location: (-9006808.473036, 4200627.223731)
+  Composite Score: 0.5799
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #4: Selected DOT RAIL CHARLOTTE LOCOMOTIVE & RAILCAR MAINT. FAC (FID 3518)
+  Cost: $0.470M, Cumulative: $18.390M
+  Capacity: 27, Cumulative: 1759
+  Location: (-9000986.060373, 4194300.868561)
+  Composite Score: 0.6608
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #5: Selected DOT RAIL CHARLOTTE LOCOMOTIVE & RAILCAR MAINT. FAC (FID 3519)
+  Cost: $0.420M, Cumulative: $18.810M
+  Capacity: 22, Cumulative: 1781
+  Location: (-9000952.285345, 4194253.624862)
+  Composite Score: 0.6579
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #6: Selected STATE PORTS AUTHORITY-INLAND CONTAINER TERMINAL (FID 2922)
+  Cost: $1.700M, Cumulative: $20.510M
+  Capacity: 150, Cumulative: 1931
+  Location: (-9005278.517749, 4201200.665961)
+  Composite Score: 0.6265
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #7: Selected DOT PAW CREEK MAINTENANCE FACILITY (FID 366)
+  Cost: $5.250M, Cumulative: $25.760M
+  Capacity: 505, Cumulative: 2436
+  Location: (-9008102.321131, 4202568.507692)
+  Composite Score: 0.6010
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #8: Selected DOT RAIL DEPOT (FID 3219)
+  Cost: $1.190M, Cumulative: $26.950M
+  Capacity: 99, Cumulative: 2535
+  Location: (-9010086.369387, 4201470.870249)
+  Composite Score: 0.5747
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #9: Selected DOT NEWELL MAINTENANCE YARD (FID 4323)
+  Cost: $6.500M, Cumulative: $33.450M
+  Capacity: 630, Cumulative: 3165
+  Location: (-8987569.701583, 4200669.056295)
+  Composite Score: 0.5694
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #10: Selected DOT MAINTENANCE YARD-STATESVILLE (FID 625)
+  Cost: $24.230M, Cumulative: $57.680M
+  Capacity: 2403, Cumulative: 5568
+  Location: (-9000046.801847, 4280324.817223)
+  Composite Score: 0.5656
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #11: Selected DOT US29/74 OLD CHARLOTTE WEIGH STATION (FID 383)
+  Cost: $0.600M, Cumulative: $58.280M
+  Capacity: 40, Cumulative: 5608
+  Location: (-9017264.926968, 4197253.176009)
+  Composite Score: 0.5448
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #12: Selected DOT MAINTENANCE YARD-DALLAS (FID 2086)
+  Cost: $6.150M, Cumulative: $64.430M
+  Capacity: 595, Cumulative: 6203
+  Location: (-9038643.521856, 4206255.368734)
+  Composite Score: 0.5418
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #13: Selected DOT NEWELL MAINTENANCE YARD (FID 4342)
+  Cost: $0.530M, Cumulative: $64.960M
+  Capacity: 33, Cumulative: 6236
+  Location: (-8987759.519115, 4200843.872632)
+  Composite Score: 0.5084
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #14: Selected DOT HAMBRIGHT ROAD MAINTENACE YARD (FID 304)
+  Cost: $5.200M, Cumulative: $70.160M
+  Capacity: 500, Cumulative: 6736
+  Location: (-9000327.027229, 4214940.026418)
+  Composite Score: 0.5015
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #15: Selected DOT NEWELL MAINTENANCE YARD (FID 4341)
+  Cost: $0.700M, Cumulative: $70.860M
+  Capacity: 50, Cumulative: 6786
+  Location: (-8987283.405773, 4200771.913199)
+  Composite Score: 0.4937
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #16: Selected DOT MAINTENANCE BULK SALT STORAGE (FID 1129)
+  Cost: $1.290M, Cumulative: $72.150M
+  Capacity: 109, Cumulative: 6895
+  Location: (-9005612.389458, 4176486.350138)
+  Composite Score: 0.4811
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #17: Selected DOT SALT STORAGE KINGS MTN I-85-US 74 (FID 381)
+  Cost: $0.790M, Cumulative: $72.940M
+  Capacity: 59, Cumulative: 6954
+  Location: (-9050989.047537, 4196907.865956)
+  Composite Score: 0.4632
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #18: Selected DOT - STATESVILLE RAIL DEPOT (FID 2233)
+  Cost: $1.080M, Cumulative: $74.020M
+  Capacity: 88, Cumulative: 7042
+  Location: (-9003915.382604, 4269716.813917)
+  Composite Score: 0.4686
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #19: Selected DOT DISTRICT SHOP-STATESVILLE (FID 644)
+  Cost: $1.580M, Cumulative: $75.600M
+  Capacity: 138, Cumulative: 7180
+  Location: (-9008349.619762, 4271296.927215)
+  Composite Score: 0.4754
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #20: Selected DOT - STATESVILLE RAIL DEPOT (FID 2234)
+  Cost: $0.490M, Cumulative: $76.090M
+  Capacity: 29, Cumulative: 7209
+  Location: (-9003999.023836, 4269795.882711)
+  Composite Score: 0.4742
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #21: Selected DOT MAINTENANCE YARD-STATESVILLE (FID 2532)
+  Cost: $2.810M, Cumulative: $78.900M
+  Capacity: 261, Cumulative: 7470
+  Location: (-8999986.573338, 4280474.511884)
+  Composite Score: 0.4603
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #22: Selected DOT RESIDUAL PROPERTY (FID 1582)
+  Cost: $9.750M, Cumulative: $88.650M
+  Capacity: 955, Cumulative: 8425
+  Location: (-8989874.117898, 4279750.767297)
+  Composite Score: 0.4584
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #23: Selected DOT MAINTENANCE YARD-LEXINGTON (FID 1215)
+  Cost: $5.960M, Cumulative: $94.610M
+  Capacity: 576, Cumulative: 9001
+  Location: (-8931008.164916, 4275247.120157)
+  Composite Score: 0.4654
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #24: Selected DOT MAINTENANCE UNIT-SALISBURY (FID 3235)
+  Cost: $2.130M, Cumulative: $96.740M
+  Capacity: 193, Cumulative: 9194
+  Location: (-8965074.071130, 4248471.068278)
+  Composite Score: 0.4419
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #25: Selected DOT MAINTENANCE UNIT-SALISBURY (FID 3234)
+  Cost: $1.170M, Cumulative: $97.910M
+  Capacity: 97, Cumulative: 9291
+  Location: (-8965308.947980, 4248541.643083)
+  Composite Score: 0.4534
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #26: Selected DOT MAINTENANCE UNIT-SALISBURY (FID 801)
+  Cost: $0.770M, Cumulative: $98.680M
+  Capacity: 57, Cumulative: 9348
+  Location: (-8964788.918858, 4248352.883145)
+  Composite Score: 0.4531
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #27: Selected DOT ROW IMAP ROWAN COUNTY (FID 1767)
+  Cost: $0.370M, Cumulative: $99.050M
+  Capacity: 17, Cumulative: 9365
+  Location: (-8961712.281590, 4248908.741518)
+  Composite Score: 0.4472
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #28: Selected DOT MAINTENANCE UNIT-SALISBURY (FID 3232)
+  Cost: $0.220M, Cumulative: $99.270M
+  Capacity: 2, Cumulative: 9367
+  Location: (-8965159.733369, 4248692.240260)
+  Composite Score: 0.4465
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #29: Selected DOT OLD US 29N WEIGH STA/BRIDGE MAINT (FID 718)
+  Cost: $1.860M, Cumulative: $101.130M
+  Capacity: 166, Cumulative: 9533
+  Location: (-8950868.354058, 4260883.538721)
+  Composite Score: 0.4562
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #30: Selected ALAMANCE COUNTY MAINTENANCE YARD/GRAHAM (FID 579)
+  Cost: $11.230M, Cumulative: $112.360M
+  Capacity: 1103, Cumulative: 10636
+  Location: (-8838088.958721, 4308738.125269)
+  Composite Score: 0.4424
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #31: Selected Mooresville Resident Engineers Office (FID 5526)
+  Cost: $0.330M, Cumulative: $112.690M
+  Capacity: 13, Cumulative: 10649
+  Location: (-9001894.245009, 4245034.996898)
+  Composite Score: 0.4398
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #32: Selected STATE PORTS AUTORITY-INTERMODAL TERMINAL (FID 229)
+  Cost: $3.450M, Cumulative: $116.140M
+  Capacity: 325, Cumulative: 10974
+  Location: (-8897994.177423, 4309256.768615)
+  Composite Score: 0.4345
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #33: Selected DOT GUILFORD IMAP (FID 3687)
+  Cost: $2.660M, Cumulative: $118.800M
+  Capacity: 246, Cumulative: 11220
+  Location: (-8896670.213897, 4310413.025322)
+  Composite Score: 0.4593
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #34: Selected DOT MAINTENANCE YARD/WEIGH STATION-EFLAND (FID 1794)
+  Cost: $10.950M, Cumulative: $129.750M
+  Capacity: 1075, Cumulative: 12295
+  Location: (-8817348.877924, 4311175.447273)
+  Composite Score: 0.4564
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #35: Selected DOT NEW DIVISION - DISTRICT OFFICES (FID 208)
+  Cost: $1.170M, Cumulative: $130.920M
+  Capacity: 97, Cumulative: 12392
+  Location: (-8880997.071117, 4313669.389663)
+  Composite Score: 0.4503
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #36: Selected DOT MAINT YARD II (SANDY RIDGE) (FID 350)
+  Cost: $2.190M, Cumulative: $133.110M
+  Capacity: 199, Cumulative: 12591
+  Location: (-8905747.442534, 4310041.553093)
+  Composite Score: 0.4499
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #37: Selected DOT MAINT YARD II (SANDY RIDGE) (FID 3688)
+  Cost: $0.790M, Cumulative: $133.900M
+  Capacity: 59, Cumulative: 12650
+  Location: (-8905646.554241, 4310284.926813)
+  Composite Score: 0.4383
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #38: Selected DOT MAINT YARD II (SANDY RIDGE) (FID 228)
+  Cost: $0.580M, Cumulative: $134.480M
+  Capacity: 38, Cumulative: 12688
+  Location: (-8905624.596419, 4310204.222027)
+  Composite Score: 0.4368
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #39: Selected DOT MAINTENANCE YARD-HILLSBOROUGH (FID 2853)
+  Cost: $5.410M, Cumulative: $139.890M
+  Capacity: 521, Cumulative: 13209
+  Location: (-8805432.100626, 4307841.494291)
+  Composite Score: 0.4530
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #40: Selected DOT DIVISION ENGINEER OFFICE (FID 69)
+  Cost: $1.270M, Cumulative: $141.160M
+  Capacity: 107, Cumulative: 13316
+  Location: (-8783642.312352, 4305109.652212)
+  Composite Score: 0.4597
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #41: Selected DOT MAINTENANCE YARD-DURHAM (FID 2848)
+  Cost: $4.440M, Cumulative: $145.600M
+  Capacity: 424, Cumulative: 13740
+  Location: (-8786343.953551, 4309492.075750)
+  Composite Score: 0.4743
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #42: Selected DOT RESIDENT ENGR-CAMDEN AVE-DURHAM (FID 522)
+  Cost: $0.410M, Cumulative: $146.010M
+  Capacity: 21, Cumulative: 13761
+  Location: (-8780325.987190, 4302549.174910)
+  Composite Score: 0.4717
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #43: Selected DOT MAINTENANCE YARD-DURHAM (FID 2847)
+  Cost: $2.320M, Cumulative: $148.330M
+  Capacity: 212, Cumulative: 13973
+  Location: (-8785756.871277, 4309792.621584)
+  Composite Score: 0.4531
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #44: Selected DOT ROW MAINTENANCE YARD - MIAMI BLVD. / I-40 (FID 1717)
+  Cost: $0.610M, Cumulative: $148.940M
+  Capacity: 41, Cumulative: 14014
+  Location: (-8777479.714282, 4285525.690141)
+  Composite Score: 0.4626
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #45: Selected DOT DISTRICT RESIDENT ENGINEERS OFFFICE (FID 2877)
+  Cost: $1.400M, Cumulative: $150.340M
+  Capacity: 120, Cumulative: 14134
+  Location: (-8838615.949390, 4308440.555958)
+  Composite Score: 0.4504
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #46: Selected ALAMANCE COUNTY MAINTENANCE YARD/GRAHAM (FID 578)
+  Cost: $0.930M, Cumulative: $151.270M
+  Capacity: 73, Cumulative: 14207
+  Location: (-8838086.791814, 4308649.979140)
+  Composite Score: 0.4399
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #47: Selected DOT GRAHAM LOVE QUARRY (FID 577)
+  Cost: $4.590M, Cumulative: $155.860M
+  Capacity: 439, Cumulative: 14646
+  Location: (-8838393.986904, 4303033.341091)
+  Composite Score: 0.4443
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #48: Selected DOT COUNTY MAINTENANCE YARD - SMITHFIELD (FID 2423)
+  Cost: $16.910M, Cumulative: $172.770M
+  Capacity: 1671, Cumulative: 16317
+  Location: (-8720216.634721, 4240450.211436)
+  Composite Score: 0.4536
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Iteration #49: Selected DOT NEW DIVISION ENGINEER OFFICE (FID 294)
+  Cost: $2.230M, Cumulative: $175.000M
+  Capacity: 203, Cumulative: 16520
+  Location: (-8932665.469217, 4309890.695968)
+  Composite Score: 0.4458
+Calculating proximity to existing facilities for no_service scenario...
+Updating composite scores for no_service scenario...
+Maximum budget of $175.0M would be exceeded. Stopping selection process.
+
+Results for no_service scenario:
+Total selected locations: 49
+Total capacity: 16520 spaces
+Total cost: $175.000M
+Detailed selection results saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/selection_order/no_service_selection_order_readable.csv
+Individual iteration results saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/iterations/no_service
+
+Starting continuous budget allocation for full_service scenario up to $175.0M
+Calculating proximity to existing facilities for full_service scenario...
+Updating composite scores for full_service scenario...
+Iteration #1: Selected DOT METROLINA REGIONAL TRAFFIC MANAGEMENT CENTER (FID 2977)
+  Cost: $23.884M, Cumulative: $23.884M
+  Capacity: 252, Cumulative: 252
+  Location: (-8999270.798658, 4200551.491080)
+  Composite Score: 0.5528
+Calculating proximity to existing facilities for full_service scenario...
+Updating composite scores for full_service scenario...
+Iteration #2: Selected DOT GENERAL LARGE ROW TRACTS (FID 4331)
+  Cost: $74.938M, Cumulative: $98.822M
+  Capacity: 1014, Cumulative: 1266
+  Location: (-8806391.587772, 4108827.559316)
+  Composite Score: 0.5067
+Calculating proximity to existing facilities for full_service scenario...
+Updating composite scores for full_service scenario...
+Iteration #3: Selected STATE PORTS AUTHORITY-INLAND CONTAINER TERMINAL (FID 678)
+  Cost: $38.222M, Cumulative: $137.044M
+  Capacity: 466, Cumulative: 1732
+  Location: (-9006808.473036, 4200627.223731)
+  Composite Score: 0.4827
+Calculating proximity to existing facilities for full_service scenario...
+Updating composite scores for full_service scenario...
+Maximum budget of $175.0M would be exceeded. Stopping selection process.
+
+Results for full_service scenario:
+Total selected locations: 3
+Total capacity: 1732 spaces
+Total cost: $137.044M
+Detailed selection results saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/selection_order/full_service_selection_order_readable.csv
+Individual iteration results saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/iterations/full_service
+Creating true horizontal staircase plot...
+Continuous step plot saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/figures/continuous_step_plot.png and /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/figures/continuous_step_plot.pdf
+
+Saving complete facility selection tables...
+No-Service facility table saved with 49 facilities
+  Total budget used: $175.000M
+  Total capacity provided: 16520
+Full-Service facility table saved with 3 facilities
+  Total budget used: $137.044M
+  Total capacity provided: 1732
+Complete facility selection tables saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/continuous_selection
+
+Creating combined summary table...
+Combined summary table saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/continuous_selection/budget_summary_statistics.csv
+
+Creating appendix tables for facility selection...
+Loaded finalized_shortlisted_candidates.shp with 128 features
+Columns in finalized_shortlisted_candidates.shp: ['FID', 'DEED_ACRES', 'GIS_ACRES', 'ComplexNam', 'DeptName', 'DivName', 'Shape_Leng', 'Shape_Area', 'ComplexTyp', 'CountyKey', 'ComplexKey', 'AssetKey', 'ComplexCom', 'AssetCombi', 'EditDate', 'LandAssetI', 'SPO_FILE_0', 'x', 'y', 'FID_2', 'GIS_Rte_Cd', 'COUNTY', 'HO_ROUTE', 'HO_MP_BGN', 'HO_MP_END', 'Legend', 'Color', 'ORDINANCE', 'ROUTE', 'MP_BGN', 'MP_END', 'SHP_Troop', 'DESCRIPTIO', 'National_N', 'Effective_', 'CNTY_NM', 'FTR_TXT', 'LOC_ERROR', 'RID', 'FMEAS', 'TMEAS', 'LOC_ERROR2', 'InventoryS', 'Shape_Le_1', 'Shape__Len', 'geometry']
+Found county column: CNTY_NM
+Sample county values from CNTY_NM:
+0    PENDER
+1    PENDER
+2    PENDER
+3    PENDER
+4    DURHAM
+Name: CNTY_NM, dtype: object
+
+Appendix Summary for no_service:
+Total facilities: 36
+Facilities with Interstate values: 36
+Facilities with County values: 36
+No_service scenario appendix saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/appendices/Appendix_NO_SERVICE_Selected_Facilities.csv
+
+Appendix Summary for full_service:
+Total facilities: 3
+Facilities with Interstate values: 3
+Facilities with County values: 3
+Full_service scenario appendix saved to /Users/komalgulati/Documents/Project_3_1/simulation/codes/../results/appendices/Appendix_FULL_SERVICE_Selected_Facilities.csv
+Appendix tables created successfully.
