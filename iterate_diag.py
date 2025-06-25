@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
 """
-DIAGNOSTIC FACILITY OPTIMIZATION SYSTEM
-Complete diagnostic script to identify and fix optimization issues
+CORRECTED UNIFIED FACILITY OPTIMIZATION SYSTEM
+Using real traffic data and proper FHWA demand calculation methodology
+Removes all random assumptions and uses actual data sources
 """
 
 import pandas as pd
@@ -12,41 +12,268 @@ import matplotlib.pyplot as plt
 from shapely.geometry import Point
 import pulp
 import warnings
-import requests
 import time
 from geopy.geocoders import Nominatim
+from pathlib import Path
 warnings.filterwarnings('ignore')
 
-# Define budget scenarios for comprehensive analysis
-BUDGET_SCENARIOS = {
-    'current': 175e6,      # Current budget constraint (175 million)
-    'expanded': 1000e6     # Expanded budget scenario (1 billion)
-}
+# =============================================================================
+# CONFIGURATION - REAL DATA PATHS
+# =============================================================================
 
-# Define excluded facility types
-EXCLUDED_FACILITY_TYPES = ["DMV", "License", "Welcome Center", "Municipal", "Courthouse", "Rest Area"]
-
-# Weights for demand-based composite scoring
-PRIMARY_WEIGHT = 0.5  # Unmet demand reduction
-SECONDARY_WEIGHT = 0.5  # Traditional factors (crash, accessibility, etc.)
-
-# Proximity analysis parameters for intelligent facility type selection
-PROXIMITY_ANALYSIS_RADIUS = 25.0  # Miles - radius for analyzing local infrastructure
-TRUCK_STOP_SPACING_THRESHOLD = 15.0  # Miles - minimum spacing between truck stops
-REST_AREA_SPACING_THRESHOLD = 10.0   # Miles - minimum spacing between rest areas
-
-# File paths - using actual data sources
+# File paths - REAL DATA PATHS as per your working demand analysis
 TRAFFIC_PATH = '/Users/komalgulati/Documents/Project_3_1/simulation/results/traffic_segments_interstates_only.gpkg'
 INTERSTATE_PATH = '/Users/komalgulati/Documents/Project_3_1/simulation/datasets/interstate_ncdot.gpkg'
 EXISTING_PATH = '/Users/komalgulati/Documents/Project_3_1/simulation/datasets/existing.gpkg'
 CANDIDATE_PATH = '/Users/komalgulati/Documents/Project_3_1/simulation/datasets/shortlisted_candidates.shp'
 COUNTY_PATH = '/Users/komalgulati/Documents/Project_3_1/simulation/datasets/county.csv'
-OUTPUT_DIR = '/Users/komalgulati/Documents/Project_3_1/simulation/results/unified_optimization'
+OUTPUT_DIR = '/Users/komalgulati/Documents/Project_3_1/simulation/results/corrected_optimization'
+
+# Budget scenarios for optimization
+BUDGET_SCENARIOS = {
+    'current': 175e6,      # Current budget constraint (175 million)
+    'expanded': 1000e6     # Expanded budget scenario (1 billion)
+}
+
+# Excluded facility types from candidates
+EXCLUDED_FACILITY_TYPES = ["DMV", "License", "Welcome Center", "Municipal", "Courthouse", "Rest Area"]
+
+# Weights for demand-based composite scoring
+PRIMARY_WEIGHT = 0.6    # Unmet demand reduction (increased from 0.5)
+SECONDARY_WEIGHT = 0.4  # Traditional factors (crash, accessibility, etc.)
+
+# Proximity analysis parameters
+PROXIMITY_ANALYSIS_RADIUS = 10.0   # Miles - radius for analyzing local infrastructure
+TRUCK_STOP_SPACING_THRESHOLD = 20.0  # Miles - minimum spacing between truck stops
+REST_AREA_SPACING_THRESHOLD = 5.0   # Miles - minimum spacing between rest areas
+
+# FHWA MILP formulation constants - EXACT VALUES from working demand analysis
+F_S = 1.15  # Seasonal peaking factor
+
+P_CLASS = {
+    'urban': {'short_haul': 0.36, 'long_haul': 0.64},
+    'rural': {'short_haul': 0.07, 'long_haul': 0.93}
+}
+
+P_FACILITY = {'rest_area': 0.23, 'truck_stop': 0.77}
+P_PEAK = {'short_haul': 0.02, 'long_haul': 0.09}
+P_PARK = {'short_haul': 5/60, 'long_haul': 0.783}  # Parking duration in hours
+
+# Urban counties for proper classification
+URBAN_COUNTIES = ['Wake', 'Mecklenburg', 'Durham', 'Guilford', 'Forsyth', 'Cumberland', 'Buncombe', 'New Hanover']
 
 # Get the current directory of the script
 script_dir = os.path.dirname(__file__)
 if not script_dir:
     script_dir = '.'
+
+# =============================================================================
+# REAL DATA LOADING FUNCTIONS
+# =============================================================================
+
+def load_real_traffic_segments():
+    """Load REAL traffic segments with proper demand calculation"""
+    print("Loading real traffic segments with FHWA demand calculation...")
+    
+    try:
+        # Load the REAL traffic data
+        traffic_gdf = gpd.read_file(TRAFFIC_PATH)
+        print(f"✓ Loaded {len(traffic_gdf)} traffic segments from real data")
+        
+        # Convert to WGS84 if not already
+        if traffic_gdf.crs != "EPSG:4326":
+            traffic_gdf = traffic_gdf.to_crs(epsg=4326)
+            print("✓ Converted CRS to EPSG:4326")
+        
+        # Calculate midpoint and extract lat/lon
+        traffic_gdf['midpoint'] = traffic_gdf.geometry.interpolate(0.5, normalized=True)
+        traffic_gdf['Latitude'] = traffic_gdf['midpoint'].y
+        traffic_gdf['Longitude'] = traffic_gdf['midpoint'].x
+        print("✓ Extracted midpoint coordinates")
+        
+        # Convert to DataFrame and keep relevant columns
+        traffic_segments = pd.DataFrame(traffic_gdf.drop(columns='geometry'))
+        
+        # Verify AADTT column exists (truck traffic field)
+        if 'AADTT' not in traffic_segments.columns:
+            print(f"ERROR: AADTT column not found. Available columns: {list(traffic_segments.columns)}")
+            return None
+        
+        print(f"✓ AADTT range: {traffic_segments['AADTT'].min():.0f} to {traffic_segments['AADTT'].max():.0f}")
+        print(f"✓ Coordinates range: Lat {traffic_segments['Latitude'].min():.3f}-{traffic_segments['Latitude'].max():.3f}, "
+              f"Lon {traffic_segments['Longitude'].min():.3f}-{traffic_segments['Longitude'].max():.3f}")
+        
+        # Assign counties using RouteID mapping
+        traffic_segments = assign_counties_by_route_id(traffic_segments)
+        
+        # Use existing interstate_assignment field
+        traffic_segments = assign_interstate_from_data(traffic_segments)
+        
+        # Calculate FHWA demand using real methodology
+        traffic_segments = calculate_fhwa_demand(traffic_segments)
+        
+        return traffic_segments
+        
+    except Exception as e:
+        print(f"ERROR loading traffic segments: {e}")
+        return None
+
+def assign_counties_by_route_id(traffic_segments):
+    """Assign counties using RouteID mapping - EXACT method from working code"""
+    print("Assigning counties by RouteID...")
+    
+    # NC county code mapping dictionary - EXACT from working code
+    nc_county_codes = {
+        '001': 'Alamance', '002': 'Alexander', '003': 'Alleghany', '004': 'Anson', '005': 'Ashe',
+        '006': 'Avery', '007': 'Beaufort', '008': 'Bertie', '009': 'Bladen', '010': 'Brunswick',
+        '011': 'Buncombe', '012': 'Burke', '013': 'Cabarrus', '014': 'Caldwell', '015': 'Camden',
+        '016': 'Carteret', '017': 'Caswell', '018': 'Catawba', '019': 'Chatham', '020': 'Cherokee',
+        '021': 'Chowan', '022': 'Clay', '023': 'Cleveland', '024': 'Columbus', '025': 'Craven',
+        '026': 'Cumberland', '027': 'Currituck', '028': 'Dare', '029': 'Davidson', '030': 'Davie',
+        '031': 'Duplin', '032': 'Durham', '033': 'Edgecombe', '034': 'Forsyth', '035': 'Franklin',
+        '036': 'Gaston', '037': 'Gates', '038': 'Graham', '039': 'Granville', '040': 'Greene',
+        '041': 'Guilford', '042': 'Halifax', '043': 'Harnett', '044': 'Haywood', '045': 'Henderson',
+        '046': 'Hertford', '047': 'Hoke', '048': 'Hyde', '049': 'Iredell', '050': 'Jackson',
+        '051': 'Johnston', '052': 'Jones', '053': 'Lee', '054': 'Lenoir', '055': 'Lincoln',
+        '056': 'Macon', '057': 'Madison', '058': 'Martin', '059': 'McDowell', '060': 'Mecklenburg',
+        '061': 'Mitchell', '062': 'Montgomery', '063': 'Moore', '064': 'Nash', '065': 'New Hanover',
+        '066': 'Northampton', '067': 'Onslow', '068': 'Orange', '069': 'Pamlico', '070': 'Pasquotank',
+        '071': 'Pender', '072': 'Perquimans', '073': 'Person', '074': 'Pitt', '075': 'Polk',
+        '076': 'Randolph', '077': 'Richmond', '078': 'Robeson', '079': 'Rockingham', '080': 'Rowan',
+        '081': 'Rutherford', '082': 'Sampson', '083': 'Scotland', '084': 'Stanly', '085': 'Stokes',
+        '086': 'Surry', '087': 'Swain', '088': 'Transylvania', '089': 'Tyrrell', '090': 'Union',
+        '091': 'Vance', '092': 'Wake', '093': 'Warren', '094': 'Washington', '095': 'Watauga',
+        '096': 'Wayne', '097': 'Wilkes', '098': 'Wilson', '099': 'Yadkin', '100': 'Yancey'
+    }
+    
+    def assign_county_by_route_code(row):
+        route_id = str(row['RouteID'])
+        
+        if len(route_id) >= 3:
+            last_three = route_id[-3:]
+            if last_three in nc_county_codes:
+                return nc_county_codes[last_three]
+            if last_three.startswith('0'):
+                padded = last_three[1:].zfill(3)
+                if padded in nc_county_codes:
+                    return nc_county_codes[padded]
+        
+        if len(route_id) >= 2:
+            last_two = route_id[-2:].zfill(3)
+            if last_two in nc_county_codes:
+                return nc_county_codes[last_two]
+        
+        return 'Unknown'
+    
+    # Apply county assignment
+    traffic_segments['assigned_county'] = traffic_segments.apply(assign_county_by_route_code, axis=1)
+    
+    # Report results
+    county_counts = traffic_segments['assigned_county'].value_counts()
+    known_counties = county_counts[county_counts.index != 'Unknown']
+    unknown_count = county_counts.get('Unknown', 0)
+    
+    print(f"✓ County assignment complete:")
+    print(f"  Successfully assigned: {len(known_counties)} different counties")
+    print(f"  Unknown assignments: {unknown_count} segments")
+    print(f"  Top counties: {dict(known_counties.head(5))}")
+    
+    return traffic_segments
+
+def assign_interstate_from_data(traffic_segments):
+    """Use existing interstate_assignment field from the data"""
+    print("Using interstate_assignment field from data...")
+    
+    if 'interstate_assignment' not in traffic_segments.columns:
+        print("ERROR: interstate_assignment field not found in traffic segments")
+        return traffic_segments
+    
+    # Report interstate distribution
+    interstate_counts = traffic_segments['interstate_assignment'].value_counts()
+    print(f"✓ Interstate distribution from data:")
+    for interstate, count in interstate_counts.items():
+        print(f"  {interstate}: {count} segments")
+    
+    return traffic_segments
+
+def calculate_fhwa_demand(traffic_segments):
+    """Calculate demand using EXACT FHWA MILP formula from working code"""
+    print("Calculating FHWA demand for all 4 classes...")
+    
+    # Add urban/rural classification
+    traffic_segments['is_urban'] = traffic_segments['assigned_county'].isin(URBAN_COUNTIES)
+    
+    # Calculate segment properties
+    if 'EndMP' in traffic_segments.columns and 'BeginMP' in traffic_segments.columns:
+        traffic_segments['length_miles'] = (
+            traffic_segments['EndMP'] - traffic_segments['BeginMP']
+        ).clip(lower=0.1, upper=20.0)
+    else:
+        # Use default length if milepost data not available
+        traffic_segments['length_miles'] = 1.0
+        print("WARNING: Using default segment length (EndMP/BeginMP not found)")
+    
+    traffic_segments['speed_limit'] = 60  # Default assumption for interstates
+    traffic_segments['travel_time_hours'] = (
+        traffic_segments['length_miles'] / traffic_segments['speed_limit']
+    )
+    
+    # Define truck classes - EXACT from working code
+    truck_classes = {
+        1: {'name': 'Short-Haul Rest Area', 'haul': 'short_haul', 'facility': 'rest_area'},
+        2: {'name': 'Short-Haul Truck Stop', 'haul': 'short_haul', 'facility': 'truck_stop'},
+        3: {'name': 'Long-Haul Rest Area', 'haul': 'long_haul', 'facility': 'rest_area'},
+        4: {'name': 'Long-Haul Truck Stop', 'haul': 'long_haul', 'facility': 'truck_stop'}
+    }
+    
+    print("Applying FHWA MILP formula step by step:")
+    print(f"  F_S (Seasonal factor): {F_S}")
+    print(f"  Urban vs Rural ratios: {P_CLASS}")
+    print(f"  Facility preferences: {P_FACILITY}")
+    print(f"  Peak factors: {P_PEAK}")
+    print(f"  Parking durations: {P_PARK}")
+    
+    # Calculate demand for each class using EXACT FHWA formula
+    for k, class_info in truck_classes.items():
+        haul_type = class_info['haul']
+        facility_type = class_info['facility']
+        
+        print(f"  Calculating Class {k}: {class_info['name']}")
+        
+        # Step-by-step FHWA calculation using AADTT (truck traffic)
+        base_aadtt = traffic_segments['AADTT']
+        seasonal_aadtt = base_aadtt * F_S
+        
+        area_type = traffic_segments['is_urban'].map({True: 'urban', False: 'rural'})
+        class_proportion = area_type.map(lambda x: P_CLASS[x][haul_type])
+        class_traffic = seasonal_aadtt * class_proportion
+        
+        facility_traffic = class_traffic * P_FACILITY[facility_type]
+        peak_traffic = facility_traffic * P_PEAK[haul_type]
+        travel_time_factor = traffic_segments['travel_time_hours']
+        parking_factor = P_PARK[haul_type]
+        
+        final_demand = peak_traffic * travel_time_factor * parking_factor
+        
+        # Store results
+        traffic_segments[f'demand_class_{k}'] = final_demand.fillna(0)
+        
+        print(f"    Total demand: {final_demand.sum():.2f} trucks")
+    
+    # Calculate aggregated demands
+    traffic_segments['demand_short_haul'] = (
+        traffic_segments['demand_class_1'] + traffic_segments['demand_class_2']
+    )
+    traffic_segments['demand_long_haul'] = (
+        traffic_segments['demand_class_3'] + traffic_segments['demand_class_4']
+    )
+    traffic_segments['demand_total'] = (
+        traffic_segments['demand_short_haul'] + traffic_segments['demand_long_haul']
+    )
+    
+    print(f"✓ Total demand across all classes: {traffic_segments['demand_total'].sum():.2f} trucks")
+    
+    return traffic_segments
 
 def get_demand_class_descriptions():
     """Return descriptions of demand classes for reporting"""
@@ -57,12 +284,14 @@ def get_demand_class_descriptions():
         'class_4': 'Long-Haul Truck Stop (full service, overnight)'
     }
 
+# =============================================================================
+# UNMET DEMAND CALCULATOR - CORRECTED VERSION
+# =============================================================================
+
 class UnmetDemandCalculator:
-    """
-    Calculate unmet demand using Linear Programming with variable distance thresholds
-    """
+    """Calculate unmet demand using Linear Programming with real traffic data"""
     
-    def __init__(self, traffic_segments, facilities, base_distance_threshold=50.0):
+    def __init__(self, traffic_segments, facilities, base_distance_threshold=5.0):
         self.traffic_segments = traffic_segments.copy()
         self.facilities = facilities.copy()
         self.base_distance_threshold = base_distance_threshold
@@ -74,9 +303,6 @@ class UnmetDemandCalculator:
         
         # Calculate distance matrix
         self.distance_matrix = self._calculate_distance_matrix()
-        
-        # Calculate segment-specific thresholds
-        self.segment_thresholds = self._calculate_segment_thresholds()
         
         print("Demand calculator initialization completed successfully")
     
@@ -155,35 +381,6 @@ class UnmetDemandCalculator:
         except:
             return np.nan
     
-    def _calculate_segment_thresholds(self):
-        """Calculate variable distance thresholds for each segment"""
-        segment_thresholds = {}
-        
-        existing_facilities = [
-            j for j in range(len(self.facilities)) 
-            if self.facilities.iloc[j].get('facility_type', '') == 'existing'
-        ]
-        
-        print(f"Calculating thresholds based on {len(existing_facilities)} existing facilities")
-        
-        for i in range(len(self.traffic_segments)):
-            if existing_facilities:
-                existing_dists = [self.distance_matrix[i, j] for j in existing_facilities 
-                                if not np.isnan(self.distance_matrix[i, j])]
-                
-                if len(existing_dists) >= 4:
-                    threshold = sorted(existing_dists)[3]  # 4th closest
-                elif existing_dists:
-                    threshold = max(existing_dists)
-                else:
-                    threshold = self.base_distance_threshold
-            else:
-                threshold = self.base_distance_threshold
-            
-            segment_thresholds[i] = threshold
-        
-        return segment_thresholds
-    
     def calculate_unmet_demand_lp(self, selected_facilities, facility_types):
         """Calculate unmet demand using LP optimization"""
         classes = {
@@ -223,11 +420,10 @@ class UnmetDemandCalculator:
                 # Decision variables
                 for i in range(n_segments):
                     u_vars[i] = pulp.LpVariable(f"u_{i}", 0, None)
-                    radius = self.segment_thresholds.get(i, self.base_distance_threshold)
                     
                     for j in compatible_facilities:
                         if (not np.isnan(self.distance_matrix[i, j]) and 
-                            self.distance_matrix[i, j] <= radius):
+                            self.distance_matrix[i, j] <= self.base_distance_threshold):
                             y_vars[(i, j)] = pulp.LpVariable(f"y_{i}_{j}", 0, None)
                 
                 # Objective: minimize total unmet demand
@@ -269,10 +465,12 @@ class UnmetDemandCalculator:
         
         return unmet_results
 
+# =============================================================================
+# PROXIMITY ANALYSIS CLASS
+# =============================================================================
+
 class ProximityAnalyzer:
-    """
-    Intelligent proximity analysis for facility type selection
-    """
+    """Intelligent proximity analysis for facility type selection"""
     
     def __init__(self, all_facilities):
         self.all_facilities = all_facilities
@@ -305,9 +503,7 @@ class ProximityAnalyzer:
             return np.nan
     
     def analyze_local_infrastructure(self, candidate_lat, candidate_lon, current_facility_types):
-        """
-        Analyze local infrastructure around a candidate location to determine optimal facility type
-        """
+        """Analyze local infrastructure around a candidate location"""
         
         # Calculate distances to all existing and selected facilities
         distances_and_types = []
@@ -334,7 +530,7 @@ class ProximityAnalyzer:
         nearby_truck_stops = [f for f in distances_and_types if f['facility_type'] == 'truck_stop']
         nearby_rest_areas = [f for f in distances_and_types if f['facility_type'] == 'rest_area']
         
-        # Strategic facility type recommendation based on local infrastructure gaps
+        # Strategic facility type recommendation
         recommendation = self._determine_facility_type_recommendation(
             distances_and_types, nearby_truck_stops, nearby_rest_areas
         )
@@ -342,11 +538,9 @@ class ProximityAnalyzer:
         return recommendation
     
     def _determine_facility_type_recommendation(self, nearby_facilities, nearby_truck_stops, nearby_rest_areas):
-        """
-        Apply strategic logic to recommend facility type based on local infrastructure analysis
-        """
+        """Apply strategic logic to recommend facility type"""
         
-        # If no nearby facilities, prefer truck stop (comprehensive service for underserved area)
+        # If no nearby facilities, prefer truck stop
         if not nearby_facilities:
             return {
                 'recommended_type': 'truck_stop',
@@ -354,7 +548,7 @@ class ProximityAnalyzer:
                 'reasoning': 'No nearby facilities - truck stop provides comprehensive coverage'
             }
         
-        # Check for very close truck stops (competition concern)
+        # Check for very close truck stops
         closest_truck_stop_distance = min([f['distance'] for f in nearby_truck_stops]) if nearby_truck_stops else float('inf')
         
         if closest_truck_stop_distance < TRUCK_STOP_SPACING_THRESHOLD:
@@ -374,11 +568,10 @@ class ProximityAnalyzer:
                 'reasoning': f'Rest area within {closest_rest_area_distance:.1f} miles but no close truck stops - truck stop fills service gap'
             }
         
-        # Balance assessment: what type of facility is most needed in this area?
+        # Balance assessment
         truck_stop_density = len([f for f in nearby_truck_stops if f['distance'] <= 20])
         rest_area_density = len([f for f in nearby_rest_areas if f['distance'] <= 20])
         
-        # Enhanced logic to better balance facility types
         if truck_stop_density >= 2 and rest_area_density == 0:
             return {
                 'recommended_type': 'rest_area',
@@ -391,7 +584,7 @@ class ProximityAnalyzer:
                 'confidence': 0.8,
                 'reasoning': f'Multiple rest areas ({rest_area_density}) but no truck stops - truck stop fills full service gap'
             }
-        elif truck_stop_density > rest_area_density + 1:  # Significantly more truck stops
+        elif truck_stop_density > rest_area_density + 1:
             return {
                 'recommended_type': 'rest_area',
                 'confidence': 0.7,
@@ -404,11 +597,125 @@ class ProximityAnalyzer:
                 'reasoning': f'Local area needs comprehensive service - truck stop provides full amenities'
             }
 
+# =============================================================================
+# DEMAND-BASED FACILITY TYPE ANALYSIS
+# =============================================================================
+
+def analyze_demand_patterns(candidate_lat, candidate_lon, traffic_segments, radius=5.0):
+    """Analyze demand patterns around a candidate location to recommend facility type"""
+    
+    # Calculate distances to all traffic segments
+    segment_distances = []
+    
+    for idx, segment in traffic_segments.iterrows():
+        # Haversine distance calculation
+        lat_diff = np.radians(candidate_lat - segment['Latitude'])
+        lon_diff = np.radians(candidate_lon - segment['Longitude'])
+        lat1, lat2 = np.radians(segment['Latitude']), np.radians(candidate_lat)
+        
+        a = np.sin(lat_diff/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(lon_diff/2)**2
+        c = 2 * np.arcsin(np.sqrt(a))
+        distance = 3959.87433 * c  # Earth radius in miles
+        
+        if distance <= radius:
+            segment_distances.append({
+                'distance': distance,
+                'demand_class_1': segment['demand_class_1'],  # Rest area short-haul
+                'demand_class_2': segment['demand_class_2'],  # Truck stop short-haul  
+                'demand_class_3': segment['demand_class_3'],  # Rest area long-haul
+                'demand_class_4': segment['demand_class_4']   # Truck stop long-haul
+            })
+    
+    if not segment_distances:
+        return {
+            'recommended_type': 'truck_stop',
+            'confidence': 0.6,
+            'reasoning': 'No nearby demand data - truck stop provides comprehensive coverage',
+            'demand_analysis': {'rest_area_total': 0, 'truck_stop_total': 0, 'all_classes': [0, 0, 0, 0]}
+        }
+    
+    # Calculate weighted demand for ALL 4 classes individually
+    class_demands = [0, 0, 0, 0]  # Classes 1, 2, 3, 4
+    
+    for segment in segment_distances:
+        weight = 1 / (1 + segment['distance'])  # Inverse distance weighting
+        
+        class_demands[0] += segment['demand_class_1'] * weight
+        class_demands[1] += segment['demand_class_2'] * weight
+        class_demands[2] += segment['demand_class_3'] * weight
+        class_demands[3] += segment['demand_class_4'] * weight
+    
+    # Aggregate by facility type
+    rest_area_demand = class_demands[0] + class_demands[2]    # Classes 1 + 3
+    truck_stop_demand = class_demands[1] + class_demands[3]   # Classes 2 + 4
+    total_demand = rest_area_demand + truck_stop_demand
+    
+    if total_demand == 0:
+        return {
+            'recommended_type': 'truck_stop',
+            'confidence': 0.5,
+            'reasoning': 'No significant demand detected - truck stop for general coverage',
+            'demand_analysis': {'rest_area_total': 0, 'truck_stop_total': 0, 'all_classes': class_demands}
+        }
+    
+    # Decision logic based on demand ratios and significance
+    truck_stop_ratio = truck_stop_demand / total_demand
+    
+    if truck_stop_ratio > 0.7:
+        return {
+            'recommended_type': 'truck_stop',
+            'confidence': min(0.9, truck_stop_ratio + 0.2),
+            'reasoning': f'Strong truck stop demand ({truck_stop_ratio:.1%})',
+            'demand_analysis': {
+                'rest_area_total': rest_area_demand,
+                'truck_stop_total': truck_stop_demand,
+                'all_classes': class_demands
+            }
+        }
+    elif truck_stop_ratio < 0.3:
+        return {
+            'recommended_type': 'rest_area',
+            'confidence': min(0.9, (1 - truck_stop_ratio) + 0.2),
+            'reasoning': f'Strong rest area demand ({(1-truck_stop_ratio):.1%})',
+            'demand_analysis': {
+                'rest_area_total': rest_area_demand,
+                'truck_stop_total': truck_stop_demand,
+                'all_classes': class_demands
+            }
+        }
+    else:
+        # Balanced demand - consider cost effectiveness
+        if rest_area_demand > truck_stop_demand * 0.4:  # Rest area demand is significant
+            return {
+                'recommended_type': 'rest_area',
+                'confidence': 0.6,
+                'reasoning': f'Balanced demand - rest area cost-effective',
+                'demand_analysis': {
+                    'rest_area_total': rest_area_demand,
+                    'truck_stop_total': truck_stop_demand,
+                    'all_classes': class_demands
+                }
+            }
+        else:
+            return {
+                'recommended_type': 'truck_stop',
+                'confidence': 0.6,
+                'reasoning': f'Balanced demand - truck stop for comprehensive service',
+                'demand_analysis': {
+                    'rest_area_total': rest_area_demand,
+                    'truck_stop_total': truck_stop_demand,
+                    'all_classes': class_demands
+                }
+            }
+
+# =============================================================================
+# LOCATION INFORMATION FUNCTIONS
+# =============================================================================
+
 def load_county_data():
     """Load county boundary data for North Carolina"""
-    print("Loading county boundary data...")
+    print("Checking for county boundary data...")
     
-    # Option 1: Try to load from local shapefile
     county_paths = [
         os.path.join(script_dir, "../datasets/nc_counties.shp"),
         os.path.join(script_dir, "../datasets/counties.shp"),
@@ -418,39 +725,35 @@ def load_county_data():
     for path in county_paths:
         try:
             counties_gdf = gpd.read_file(path)
-            print(f"Loaded county data from: {path}")
-            # Ensure consistent CRS
+            print(f"✓ Loaded county boundary data from: {path}")
             if counties_gdf.crs != "EPSG:4326":
                 counties_gdf = counties_gdf.to_crs("EPSG:4326")
             return counties_gdf
         except:
             continue
     
-    print("Warning: County boundary data not found. Will use reverse geocoding for location names.")
+    print("ℹ️  County boundary shapefiles not found - using RouteID-based county assignment")
     return None
 
 def get_location_info(lat, lon, counties_gdf=None):
     """Get county/city information for a given coordinate"""
     if counties_gdf is not None:
-        # Method 1: Use county boundaries (most accurate)
         try:
             point = Point(lon, lat)
             
-            # Find which county contains this point
             for idx, county in counties_gdf.iterrows():
                 if county.geometry.contains(point):
                     county_name = county.get('NAME', county.get('COUNTY', county.get('name', 'Unknown')))
                     return {
                         'county': county_name,
-                        'city': 'Unknown',  # Would need city boundaries for this
+                        'city': 'Unknown',
                         'method': 'spatial_join'
                     }
         except Exception as e:
             print(f"Error in spatial join: {e}")
     
-    # Method 2: Use reverse geocoding (backup method)
+    # Fallback to reverse geocoding
     try:
-        # Simple reverse geocoding using Nominatim (free but slower)
         geolocator = Nominatim(user_agent="facility_optimization")
         location = geolocator.reverse((lat, lon), timeout=10)
         
@@ -467,20 +770,18 @@ def get_location_info(lat, lon, counties_gdf=None):
     except Exception as e:
         print(f"Error in reverse geocoding for {lat}, {lon}: {e}")
     
-    # Method 3: Fallback - determine county based on coordinate ranges (NC specific)
     return get_nc_county_estimate(lat, lon)
 
 def get_nc_county_estimate(lat, lon):
     """Rough county estimation for North Carolina based on coordinate ranges"""
-    # Major NC counties with approximate coordinate ranges
     nc_counties = {
-        'Mecklenburg': {'lat_range': (35.0, 35.5), 'lon_range': (-81.1, -80.5)},  # Charlotte area
-        'Wake': {'lat_range': (35.6, 36.0), 'lon_range': (-78.9, -78.3)},        # Raleigh area
-        'Guilford': {'lat_range': (35.9, 36.3), 'lon_range': (-80.1, -79.6)},    # Greensboro area
-        'Forsyth': {'lat_range': (36.0, 36.3), 'lon_range': (-80.4, -80.0)},     # Winston-Salem
-        'Durham': {'lat_range': (35.8, 36.1), 'lon_range': (-79.1, -78.7)},      # Durham area
-        'Cumberland': {'lat_range': (34.9, 35.4), 'lon_range': (-79.2, -78.6)},  # Fayetteville
-        'New Hanover': {'lat_range': (34.1, 34.4), 'lon_range': (-78.1, -77.7)}, # Wilmington
+        'Mecklenburg': {'lat_range': (35.0, 35.5), 'lon_range': (-81.1, -80.5)},
+        'Wake': {'lat_range': (35.6, 36.0), 'lon_range': (-78.9, -78.3)},
+        'Guilford': {'lat_range': (35.9, 36.3), 'lon_range': (-80.1, -79.6)},
+        'Forsyth': {'lat_range': (36.0, 36.3), 'lon_range': (-80.4, -80.0)},
+        'Durham': {'lat_range': (35.8, 36.1), 'lon_range': (-79.1, -78.7)},
+        'Cumberland': {'lat_range': (34.9, 35.4), 'lon_range': (-79.2, -78.6)},
+        'New Hanover': {'lat_range': (34.1, 34.4), 'lon_range': (-78.1, -77.7)},
     }
     
     for county, ranges in nc_counties.items():
@@ -506,7 +807,6 @@ def add_location_info_to_candidates(candidates_gdf, counties_gdf):
     cities = []
     location_methods = []
     
-    # Batch process to avoid overwhelming reverse geocoding services
     for idx, candidate in candidates_gdf.iterrows():
         try:
             lat = candidate.geometry.y
@@ -518,9 +818,8 @@ def add_location_info_to_candidates(candidates_gdf, counties_gdf):
             cities.append(location_info['city'])
             location_methods.append(location_info['method'])
             
-            # Add small delay for reverse geocoding to be respectful
             if location_info['method'] == 'reverse_geocoding':
-                time.sleep(0.1)  # 100ms delay
+                time.sleep(0.1)  # Respectful delay
                 
         except Exception as e:
             print(f"Error processing candidate {idx}: {e}")
@@ -534,11 +833,14 @@ def add_location_info_to_candidates(candidates_gdf, counties_gdf):
     
     print(f"Location information added to {len(candidates_gdf)} candidates")
     
-    # Report on location methods used
     method_counts = pd.Series(location_methods).value_counts()
     print(f"Location determination methods: {dict(method_counts)}")
     
     return candidates_gdf
+
+# =============================================================================
+# COST CALCULATION FUNCTIONS
+# =============================================================================
 
 def calculate_development_costs(candidates_gdf):
     """Calculate development costs with realistic capacity caps"""
@@ -558,256 +860,46 @@ def calculate_development_costs(candidates_gdf):
     MAX_NO_SERVICE_COST = 1100000      # $1.1M maximum for rest areas
     MAX_FULL_SERVICE_COST = 13000000   # $13M maximum for truck stops
     
-    # Calculate maximum feasible capacity for each facility type
+    # Calculate maximum feasible capacity
     max_capacity_no_service = (MAX_NO_SERVICE_COST - SITE_PREP_NO_SERVICE) // COST_PER_SPACE_NO_SERVICE
     max_capacity_full_service = (MAX_FULL_SERVICE_COST - SITE_PREP_FULL_SERVICE) // COST_PER_SPACE_FULL_SERVICE
     
-    print(f"Capacity constraints derived from maximum costs:")
-    print(f"  Basic facilities (rest areas): maximum {max_capacity_no_service} spaces")
-    print(f"  Full-service facilities (truck stops): maximum {max_capacity_full_service} spaces")
+    print(f"Capacity constraints:")
+    print(f"  Basic facilities: maximum {max_capacity_no_service} spaces")
+    print(f"  Full-service facilities: maximum {max_capacity_full_service} spaces")
     
     # Apply capacity caps
     candidates_gdf['capped_capacity_no_service'] = candidates_gdf['capacity_value'].clip(upper=max_capacity_no_service)
     candidates_gdf['capped_capacity_full_service'] = candidates_gdf['capacity_value'].clip(upper=max_capacity_full_service)
     
-    # Calculate costs using the capped capacities
+    # Calculate costs
     candidates_gdf['cost_no_service'] = (SITE_PREP_NO_SERVICE + 
                                        candidates_gdf['capped_capacity_no_service'] * COST_PER_SPACE_NO_SERVICE)
     
     candidates_gdf['cost_full_service'] = (SITE_PREP_FULL_SERVICE + 
                                          candidates_gdf['capped_capacity_full_service'] * COST_PER_SPACE_FULL_SERVICE)
     
-    # Verify that no costs exceed the maximum values
+    # Verify costs don't exceed maximum
     assert candidates_gdf['cost_no_service'].max() <= MAX_NO_SERVICE_COST, "No-service costs exceed maximum!"
     assert candidates_gdf['cost_full_service'].max() <= MAX_FULL_SERVICE_COST, "Full-service costs exceed maximum!"
     
-    # Report capacity adjustments for transparency
+    # Report adjustments
     capacity_reduced_basic = (candidates_gdf['capacity_value'] > max_capacity_no_service).sum()
     capacity_reduced_full = (candidates_gdf['capacity_value'] > max_capacity_full_service).sum()
     
-    print(f"Capacity adjustments applied:")
-    print(f"  {capacity_reduced_basic} sites had capacity reduced for basic facilities")
-    print(f"  {capacity_reduced_full} sites had capacity reduced for full-service facilities")
+    print(f"Capacity adjustments:")
+    print(f"  {capacity_reduced_basic} sites reduced for basic facilities")
+    print(f"  {capacity_reduced_full} sites reduced for full-service facilities")
     
-    # Report the range of original capacities for context
-    print(f"Original capacity range: {candidates_gdf['capacity_value'].min():.0f} to {candidates_gdf['capacity_value'].max():.0f} spaces")
-    
-    # Report final cost statistics to verify everything worked correctly
-    print(f"Final cost ranges:")
-    print(f"  Basic facilities: ${candidates_gdf['cost_no_service'].min()/1e6:.2f}M to ${candidates_gdf['cost_no_service'].max()/1e6:.2f}M")
-    print(f"  Full-service facilities: ${candidates_gdf['cost_full_service'].min()/1e6:.2f}M to ${candidates_gdf['cost_full_service'].max()/1e6:.2f}M")
+    print(f"Cost ranges:")
+    print(f"  Basic: ${candidates_gdf['cost_no_service'].min()/1e6:.2f}M to ${candidates_gdf['cost_no_service'].max()/1e6:.2f}M")
+    print(f"  Full-service: ${candidates_gdf['cost_full_service'].min()/1e6:.2f}M to ${candidates_gdf['cost_full_service'].max()/1e6:.2f}M")
     
     return candidates_gdf
 
-def load_traffic_segments():
-    """Load realistic traffic segments for North Carolina using exact FHWA parameters"""
-    print("Creating traffic segments with FHWA-derived demand parameters:")
-    
-    # FHWA Constants - Based on actual driver surveys
-    F_S = 1.15  # Seasonal peaking factor
-    
-    P_CLASS = {
-        'urban': {'short_haul': 0.36, 'long_haul': 0.64},
-        'rural': {'short_haul': 0.07, 'long_haul': 0.93}
-    }
-    
-    P_FACILITY = {'rest_area': 0.23, 'truck_stop': 0.77}
-    
-    P_PEAK = {'short_haul': 0.02, 'long_haul': 0.09}
-    
-    P_PARK = {'short_haul': 5/60, 'long_haul': 0.783}  # Parking duration in hours
-    
-    print("FHWA Parameters:")
-    print(f"  Seasonal factor: {F_S}")
-    print(f"  Urban split - Short: {P_CLASS['urban']['short_haul']:.2f}, Long: {P_CLASS['urban']['long_haul']:.2f}")
-    print(f"  Rural split - Short: {P_CLASS['rural']['short_haul']:.2f}, Long: {P_CLASS['rural']['long_haul']:.2f}")
-    print(f"  Facility preference - Rest area: {P_FACILITY['rest_area']:.2f}, Truck stop: {P_FACILITY['truck_stop']:.2f}")
-    print(f"  Peak factors - Short: {P_PEAK['short_haul']:.2f}, Long: {P_PEAK['long_haul']:.2f}")
-    print(f"  Parking duration - Short: {P_PARK['short_haul']:.3f}h, Long: {P_PARK['long_haul']:.3f}h")
-    
-    # Set random seed for reproducible results
-    np.random.seed(42)
-    
-    # Create segments distributed across NC
-    n_segments = 350
-    
-    # Base distribution across NC
-    traffic_data = {
-        'Latitude': np.random.uniform(34.0, 36.5, n_segments),
-        'Longitude': np.random.uniform(-84.0, -75.5, n_segments),
-    }
-    
-    # Generate realistic AADTT values (Annual Average Daily Truck Traffic)
-    base_aadtt = np.random.exponential(500, n_segments)  # Base truck traffic
-    
-    # Assign urban/rural classification (simplified)
-    # Major urban counties in NC
-    urban_counties = ['Wake', 'Mecklenburg', 'Durham', 'Guilford', 'Forsyth', 'Cumberland', 'Buncombe', 'New Hanover']
-    
-    # Assign area type based on coordinates (simplified approach)
-    is_urban = []
-    for lat, lon in zip(traffic_data['Latitude'], traffic_data['Longitude']):
-        # Charlotte area (Mecklenburg)
-        if 35.0 <= lat <= 35.5 and -81.1 <= lon <= -80.5:
-            is_urban.append(True)
-        # Raleigh area (Wake)
-        elif 35.6 <= lat <= 36.0 and -78.9 <= lon <= -78.3:
-            is_urban.append(True)
-        # Durham area
-        elif 35.8 <= lat <= 36.1 and -79.1 <= lon <= -78.7:
-            is_urban.append(True)
-        # Greensboro area (Guilford)
-        elif 35.9 <= lat <= 36.3 and -80.1 <= lon <= -79.6:
-            is_urban.append(True)
-        else:
-            is_urban.append(False)
-    
-    traffic_data['is_urban'] = is_urban
-    traffic_data['AADTT'] = base_aadtt
-    
-    # Calculate segment properties
-    traffic_data['length_miles'] = np.random.uniform(0.5, 5.0, n_segments)  # Segment lengths
-    traffic_data['speed_limit'] = 65  # Typical interstate speed
-    
-    traffic_df = pd.DataFrame(traffic_data)
-    traffic_df['travel_time_hours'] = traffic_df['length_miles'] / traffic_df['speed_limit']
-    
-    # Calculate demand for each truck class using EXACT FHWA formula
-    truck_classes = {
-        1: {'name': 'Short-Haul Rest Area', 'haul': 'short_haul', 'facility': 'rest_area'},
-        2: {'name': 'Short-Haul Truck Stop', 'haul': 'short_haul', 'facility': 'truck_stop'},
-        3: {'name': 'Long-Haul Rest Area', 'haul': 'long_haul', 'facility': 'rest_area'},
-        4: {'name': 'Long-Haul Truck Stop', 'haul': 'long_haul', 'facility': 'truck_stop'}
-    }
-    
-    print("\nCalculating demand using FHWA MILP formula:")
-    
-    for k, class_info in truck_classes.items():
-        haul_type = class_info['haul']
-        facility_type = class_info['facility']
-        
-        print(f"\nClass {k}: {class_info['name']}")
-        
-        # Step-by-step FHWA calculation
-        # Step 1: Apply seasonal factor
-        seasonal_aadtt = traffic_df['AADTT'] * F_S
-        
-        # Step 2: Apply haul type proportion based on area type
-        area_type = traffic_df['is_urban'].map({True: 'urban', False: 'rural'})
-        class_proportion = area_type.map(lambda x: P_CLASS[x][haul_type])
-        class_traffic = seasonal_aadtt * class_proportion
-        
-        # Step 3: Apply facility type proportion
-        facility_traffic = class_traffic * P_FACILITY[facility_type]
-        
-        # Step 4: Apply peak hour factor
-        peak_traffic = facility_traffic * P_PEAK[haul_type]
-        
-        # Step 5: Apply travel time and parking factors
-        travel_time_factor = traffic_df['travel_time_hours']
-        parking_factor = P_PARK[haul_type]
-        
-        final_demand = peak_traffic * travel_time_factor * parking_factor
-        
-        traffic_df[f'demand_class_{k}'] = final_demand.fillna(0)
-        
-        total_class_demand = final_demand.sum()
-        print(f"  Total demand: {total_class_demand:.2f} trucks")
-        
-        # Show the calculation breakdown for understanding
-        avg_seasonal = seasonal_aadtt.mean()
-        avg_class_prop = class_proportion.mean()
-        avg_facility_prop = P_FACILITY[facility_type]
-        avg_peak = P_PEAK[haul_type]
-        avg_travel = travel_time_factor.mean()
-        avg_parking = parking_factor
-        
-        print(f"  Formula: AADTT({avg_seasonal:.0f}) × Class({avg_class_prop:.3f}) × Facility({avg_facility_prop:.3f}) × Peak({avg_peak:.3f}) × Travel({avg_travel:.3f}h) × Parking({avg_parking:.3f}h)")
-    
-    # Add higher-demand clusters around major cities using same formula
-    charlotte_segments = pd.DataFrame({
-        'Latitude': np.random.normal(35.2271, 0.15, 40),
-        'Longitude': np.random.normal(-80.8431, 0.15, 40),
-        'is_urban': True,
-        'AADTT': np.random.exponential(1200, 40),  # Higher urban traffic
-        'length_miles': np.random.uniform(1.0, 3.0, 40),
-        'speed_limit': 65
-    })
-    charlotte_segments['travel_time_hours'] = charlotte_segments['length_miles'] / charlotte_segments['speed_limit']
-    
-    # Apply same FHWA formula to Charlotte segments
-    for k, class_info in truck_classes.items():
-        haul_type = class_info['haul']
-        facility_type = class_info['facility']
-        
-        seasonal_aadtt = charlotte_segments['AADTT'] * F_S
-        class_proportion = P_CLASS['urban'][haul_type]  # All urban
-        class_traffic = seasonal_aadtt * class_proportion
-        facility_traffic = class_traffic * P_FACILITY[facility_type]
-        peak_traffic = facility_traffic * P_PEAK[haul_type]
-        final_demand = peak_traffic * charlotte_segments['travel_time_hours'] * P_PARK[haul_type]
-        
-        charlotte_segments[f'demand_class_{k}'] = final_demand.fillna(0)
-    
-    # Similar for Raleigh-Durham
-    raleigh_segments = pd.DataFrame({
-        'Latitude': np.random.normal(35.7796, 0.15, 35),
-        'Longitude': np.random.normal(-78.6382, 0.15, 35),
-        'is_urban': True,
-        'AADTT': np.random.exponential(1000, 35),
-        'length_miles': np.random.uniform(1.0, 3.0, 35),
-        'speed_limit': 65
-    })
-    raleigh_segments['travel_time_hours'] = raleigh_segments['length_miles'] / raleigh_segments['speed_limit']
-    
-    for k, class_info in truck_classes.items():
-        haul_type = class_info['haul']
-        facility_type = class_info['facility']
-        
-        seasonal_aadtt = raleigh_segments['AADTT'] * F_S
-        class_proportion = P_CLASS['urban'][haul_type]
-        class_traffic = seasonal_aadtt * class_proportion
-        facility_traffic = class_traffic * P_FACILITY[facility_type]
-        peak_traffic = facility_traffic * P_PEAK[haul_type]
-        final_demand = peak_traffic * raleigh_segments['travel_time_hours'] * P_PARK[haul_type]
-        
-        raleigh_segments[f'demand_class_{k}'] = final_demand.fillna(0)
-    
-    # Combine all segments
-    all_segments = pd.concat([traffic_df, charlotte_segments, raleigh_segments], ignore_index=True)
-    
-    # Calculate and report final demand distribution
-    total_demands = {}
-    for class_id in range(1, 5):
-        total_demands[f'class_{class_id}'] = all_segments[f'demand_class_{class_id}'].sum()
-    
-    total_all_demand = sum(total_demands.values())
-    
-    print(f"\n=== FINAL FHWA-BASED DEMAND SUMMARY ===")
-    print(f"Total segments: {len(all_segments)}")
-    print(f"Urban segments: {all_segments['is_urban'].sum()}")
-    print(f"Rural segments: {(~all_segments['is_urban']).sum()}")
-    print(f"Total demand: {total_all_demand:.0f} trucks")
-    
-    for class_id in range(1, 5):
-        class_name = truck_classes[class_id]['name']
-        demand = total_demands[f'class_{class_id}']
-        percentage = demand / total_all_demand * 100
-        print(f"  {class_name}: {demand:.0f} trucks ({percentage:.1f}%)")
-    
-    # Verify the ratios match FHWA expectations
-    short_haul_total = total_demands['class_1'] + total_demands['class_2']
-    long_haul_total = total_demands['class_3'] + total_demands['class_4']
-    rest_area_total = total_demands['class_1'] + total_demands['class_3']
-    truck_stop_total = total_demands['class_2'] + total_demands['class_4']
-    
-    print(f"\nFHWA Ratio Verification:")
-    print(f"  Short-haul: {short_haul_total/total_all_demand:.1%}")
-    print(f"  Long-haul: {long_haul_total/total_all_demand:.1%}")
-    print(f"  Rest area preference: {rest_area_total/total_all_demand:.1%}")
-    print(f"  Truck stop preference: {truck_stop_total/total_all_demand:.1%}")
-    
-    return all_segments
+# =============================================================================
+# EXISTING FACILITIES PROCESSING
+# =============================================================================
 
 def smart_assign_existing_facility_types(existing_facilities):
     """Enhanced facility type assignment that properly maps real-world facility types"""
@@ -816,7 +908,6 @@ def smart_assign_existing_facility_types(existing_facilities):
     
     print("=== ENHANCED EXISTING FACILITY TYPE ASSIGNMENT ===")
     
-    # Check available columns
     has_overnight = 'over_night' in existing_facilities.columns
     has_facility_t = 'Facility_T' in existing_facilities.columns
     
@@ -831,51 +922,45 @@ def smart_assign_existing_facility_types(existing_facilities):
     for idx, facility in existing_facilities.iterrows():
         facility_t = facility.get('Facility_T', None)
         
-        # Exclude facilities with missing type information
         if pd.isna(facility_t) or facility_t == '':
             excluded_facilities.append(idx)
             continue
         
-        # Enhanced classification logic that properly maps facility types
         facility_t_str = str(facility_t).lower()
         
-        # Public facilities = rest areas (basic service, government operated)
+        # Public facilities = rest areas
         if facility_t_str == 'public':
             facility_types[idx] = 'rest_area'
             type_counts['rest_area'] += 1
             
-        # Walmart facilities: context-dependent classification
+        # Walmart facilities: context-dependent
         elif facility_t_str == 'wal-mart':
             if has_overnight:
                 over_night = facility.get('over_night', None)
                 if pd.isna(over_night) or str(over_night).lower() != 'yes':
-                    # No overnight = basic parking = rest area function
                     facility_types[idx] = 'rest_area'
                     type_counts['rest_area'] += 1
                 else:
-                    # Overnight capability = comprehensive service = truck stop function
                     facility_types[idx] = 'truck_stop'
                     type_counts['truck_stop'] += 1
             else:
-                # Default Walmart to rest area (basic parking) if no overnight data
                 facility_types[idx] = 'rest_area'
                 type_counts['rest_area'] += 1
                 
-        # All other private facilities = truck stops (comprehensive service, commercially operated)
-        # This includes gas stations, truck stops, travel centers, etc.
+        # All other private facilities = truck stops
         else:
             facility_types[idx] = 'truck_stop'
             type_counts['truck_stop'] += 1
     
-    print(f"Enhanced facility type assignment results:")
-    print(f"  Rest areas (public/basic service): {type_counts['rest_area']}")
-    print(f"  Truck stops (private/full service): {type_counts['truck_stop']}")
-    print(f"  Excluded (missing data): {len(excluded_facilities)}")
+    print(f"Facility type assignment results:")
+    print(f"  Rest areas: {type_counts['rest_area']}")
+    print(f"  Truck stops: {type_counts['truck_stop']}")
+    print(f"  Excluded: {len(excluded_facilities)}")
     
     return facility_types, excluded_facilities
 
 def prepare_facilities_for_optimization(candidates_gdf, existing_facilities, traffic_segments):
-    """Prepare unified facility dataset for optimization with enhanced proximity analysis"""
+    """Prepare unified facility dataset for optimization"""
     print("Preparing facilities for optimization...")
     
     # Smart assignment of existing facility types
@@ -885,37 +970,33 @@ def prepare_facilities_for_optimization(candidates_gdf, existing_facilities, tra
     existing_clean = existing_facilities.drop(excluded_facilities).copy()
     print(f"Using {len(existing_clean)} existing facilities after filtering")
     
-    # Process existing facilities with proper coordinate handling
+    # Process existing facilities
     existing_clean['capacity'] = existing_clean.get('Final_Park', 0).fillna(0)
     existing_clean['facility_type'] = 'existing'
     
-    # Extract coordinates from geometry with error handling
+    # Extract coordinates
     try:
         existing_clean['Latitude'] = existing_clean.geometry.y
         existing_clean['Longitude'] = existing_clean.geometry.x
     except Exception as e:
         print(f"Error extracting existing facility coordinates: {e}")
-        # Try alternative coordinate extraction
         coords = existing_clean.geometry.apply(lambda geom: (geom.x, geom.y) if hasattr(geom, 'x') else (None, None))
         existing_clean['Longitude'] = coords.apply(lambda x: x[0])
         existing_clean['Latitude'] = coords.apply(lambda x: x[1])
     
-    # Validate existing facility coordinates
-    existing_lat_range = (existing_clean['Latitude'].min(), existing_clean['Latitude'].max())
-    existing_lon_range = (existing_clean['Longitude'].min(), existing_clean['Longitude'].max())
-    print(f"Existing facility coordinates: Lat {existing_lat_range}, Lon {existing_lon_range}")
-    
     # Create existing facility records
     existing_records = []
-    for idx, row in existing_clean.iterrows():
+    old_to_new_index_mapping = {}
+    
+    for new_idx, (old_idx, row) in enumerate(existing_clean.iterrows()):
         existing_records.append({
             'Latitude': row['Latitude'],
             'Longitude': row['Longitude'],
             'capacity': row['capacity'],
             'facility_type': 'existing',
-            'original_index': idx,
-            'assigned_facility_type': existing_facility_types.get(idx, 'truck_stop')
+            'original_index': old_idx
         })
+        old_to_new_index_mapping[old_idx] = new_idx
     
     # Process candidate facilities
     candidate_records = []
@@ -925,7 +1006,6 @@ def prepare_facilities_for_optimization(candidates_gdf, existing_facilities, tra
     
     for idx, row in candidates_gdf.iterrows():
         try:
-            # Extract coordinates from geometry
             lat, lon = row.geometry.y, row.geometry.x
             
             candidate_records.append({
@@ -939,144 +1019,43 @@ def prepare_facilities_for_optimization(candidates_gdf, existing_facilities, tra
             print(f"Error processing candidate {idx}: {e}")
             continue
     
-    # Validate candidate coordinates
-    if candidate_records:
-        candidate_lats = [r['Latitude'] for r in candidate_records]
-        candidate_lons = [r['Longitude'] for r in candidate_records]
-        candidate_lat_range = (min(candidate_lats), max(candidate_lats))
-        candidate_lon_range = (min(candidate_lons), max(candidate_lons))
-        print(f"Candidate coordinates: Lat {candidate_lat_range}, Lon {candidate_lon_range}")
-    
     # Combine all facilities
     all_facilities_list = existing_records + candidate_records
     all_facilities = pd.DataFrame(all_facilities_list)
     
     print(f"Combined facilities dataset:")
-    print(f"  Existing facilities: {len(existing_records)}")
-    print(f"  Candidate facilities: {len(candidate_records)}")
-    print(f"  Total facilities: {len(all_facilities)}")
+    print(f"  Existing: {len(existing_records)}")
+    print(f"  Candidates: {len(candidate_records)}")
+    print(f"  Total: {len(all_facilities)}")
     
-    # Create facility type mapping for existing facilities
+    # Create facility type mapping
     facility_type_mapping = {}
-    for idx, row in all_facilities.iterrows():
+    for new_idx, row in all_facilities.iterrows():
         if row['facility_type'] == 'existing':
-            facility_type_mapping[idx] = row['assigned_facility_type']
+            old_idx = row['original_index']
+            if old_idx in existing_facility_types:
+                facility_type_mapping[new_idx] = existing_facility_types[old_idx]
+            else:
+                facility_type_mapping[new_idx] = 'truck_stop'  # Default fallback
+    
+    print(f"✓ Facility type mapping complete: {len(facility_type_mapping)} existing facilities mapped")
+    
+    type_counts = {}
+    for ftype in facility_type_mapping.values():
+        type_counts[ftype] = type_counts.get(ftype, 0) + 1
+    print(f"✓ Facility type distribution: {type_counts}")
     
     return all_facilities, facility_type_mapping, candidate_start_idx
 
-def analyze_demand_patterns(candidate_lat, candidate_lon, traffic_segments, radius=25.0):
-    """Analyze demand patterns around a candidate location to recommend facility type"""
-    
-    # Calculate distances to all traffic segments
-    segment_distances = []
-    
-    for idx, segment in traffic_segments.iterrows():
-        # Simple distance calculation (can be replaced with haversine for accuracy)
-        lat_diff = candidate_lat - segment['Latitude']
-        lon_diff = candidate_lon - segment['Longitude']
-        distance = np.sqrt(lat_diff**2 + lon_diff**2) * 69  # Rough miles conversion
-        
-        if distance <= radius:
-            segment_distances.append({
-                'distance': distance,
-                'demand_class_1': segment['demand_class_1'],  # Rest area short-haul
-                'demand_class_2': segment['demand_class_2'],  # Truck stop short-haul  
-                'demand_class_3': segment['demand_class_3'],  # Rest area long-haul
-                'demand_class_4': segment['demand_class_4']   # Truck stop long-haul
-            })
-    
-    if not segment_distances:
-        # No nearby demand segments - default to truck stop for comprehensive coverage
-        return {
-            'recommended_type': 'truck_stop',
-            'confidence': 0.6,
-            'reasoning': 'No nearby demand data - truck stop provides comprehensive coverage',
-            'demand_analysis': {'rest_area_total': 0, 'truck_stop_total': 0}
-        }
-    
-    # Weight demand by inverse distance (closer segments matter more)
-    weighted_rest_area_demand = 0
-    weighted_truck_stop_demand = 0
-    
-    for segment in segment_distances:
-        weight = 1 / (1 + segment['distance'])  # Inverse distance weighting
-        
-        # Rest area demand = classes 1 + 3
-        rest_area_demand = (segment['demand_class_1'] + segment['demand_class_3']) * weight
-        weighted_rest_area_demand += rest_area_demand
-        
-        # Truck stop demand = classes 2 + 4  
-        truck_stop_demand = (segment['demand_class_2'] + segment['demand_class_4']) * weight
-        weighted_truck_stop_demand += truck_stop_demand
-    
-    # Determine recommendation based on dominant demand type
-    total_demand = weighted_rest_area_demand + weighted_truck_stop_demand
-    
-    if total_demand == 0:
-        return {
-            'recommended_type': 'truck_stop',
-            'confidence': 0.5,
-            'reasoning': 'No significant demand detected - truck stop for general coverage',
-            'demand_analysis': {'rest_area_total': 0, 'truck_stop_total': 0}
-        }
-    
-    truck_stop_ratio = weighted_truck_stop_demand / total_demand
-    rest_area_ratio = weighted_rest_area_demand / total_demand
-    
-    # Decision logic with confidence scoring
-    if truck_stop_ratio > 0.65:  # Increased threshold to be more selective
-        return {
-            'recommended_type': 'truck_stop',
-            'confidence': min(0.9, truck_stop_ratio + 0.1),
-            'reasoning': f'Strong truck stop demand ({truck_stop_ratio:.1%} of total)',
-            'demand_analysis': {
-                'rest_area_total': weighted_rest_area_demand,
-                'truck_stop_total': weighted_truck_stop_demand,
-                'truck_stop_ratio': truck_stop_ratio
-            }
-        }
-    elif rest_area_ratio > 0.65:  # Increased threshold to be more selective
-        return {
-            'recommended_type': 'rest_area',  
-            'confidence': min(0.9, rest_area_ratio + 0.1),
-            'reasoning': f'Strong rest area demand ({rest_area_ratio:.1%} of total)',
-            'demand_analysis': {
-                'rest_area_total': weighted_rest_area_demand,
-                'truck_stop_total': weighted_truck_stop_demand,
-                'rest_area_ratio': rest_area_ratio
-            }
-        }
-    elif rest_area_ratio > 0.45:  # Give rest areas more consideration in balanced scenarios
-        return {
-            'recommended_type': 'rest_area',
-            'confidence': 0.6,
-            'reasoning': f'Moderate rest area preference ({rest_area_ratio:.1%} vs {truck_stop_ratio:.1%}) - rest area for cost-effective basic service',
-            'demand_analysis': {
-                'rest_area_total': weighted_rest_area_demand,
-                'truck_stop_total': weighted_truck_stop_demand,
-                'truck_stop_ratio': truck_stop_ratio,
-                'rest_area_ratio': rest_area_ratio
-            }
-        }
-    else:
-        # Default to truck stop only when clearly favored
-        return {
-            'recommended_type': 'truck_stop',
-            'confidence': 0.6,
-            'reasoning': f'Truck stop preferred ({truck_stop_ratio:.1%} vs {rest_area_ratio:.1%}) - comprehensive service coverage',
-            'demand_analysis': {
-                'rest_area_total': weighted_rest_area_demand,
-                'truck_stop_total': weighted_truck_stop_demand,
-                'truck_stop_ratio': truck_stop_ratio,
-                'rest_area_ratio': rest_area_ratio
-            }
-        }
+# =============================================================================
+# DATA LOADING MAIN FUNCTION
+# =============================================================================
 
 def load_data():
-    """Load and prepare all data for optimization with improved error handling"""
+    """Load and prepare all data for optimization"""
     print("Loading and preparing data...")
     
-    # Load candidate locations with comprehensive error handling
+    # Load candidate locations
     candidate_path = os.path.join(script_dir, "../results/composite_prioritization_scores.csv")
     try:
         candidates_df = pd.read_csv(candidate_path)
@@ -1085,14 +1064,13 @@ def load_data():
         print(f"Error loading candidates: {e}")
         return None, None, None
    
-    # Load existing facilities with fallback options
+    # Load existing facilities
     existing_path = os.path.join(script_dir, "../datasets/existing_fac_without_weigh_station.shp")
     try:
         existing_facilities = gpd.read_file(existing_path)
         print(f"Loaded {len(existing_facilities)} existing facilities from shapefile")
     except:
         try:
-            # Try CSV fallback
             csv_path = existing_path.replace('.shp', '.csv')
             existing_facilities = pd.read_csv(csv_path)
             if 'Longitude' in existing_facilities.columns and 'Latitude' in existing_facilities.columns:
@@ -1106,10 +1084,9 @@ def load_data():
             print(f"Error loading existing facilities: {e}")
             return None, None, None
     
-    # Convert candidates to GeoDataFrame with proper coordinate system handling
+    # Convert candidates to GeoDataFrame
     if 'geometry' not in candidates_df.columns:
         if 'centroid_x' in candidates_df.columns and 'centroid_y' in candidates_df.columns:
-            # Check coordinate system
             x_range = (candidates_df['centroid_x'].min(), candidates_df['centroid_x'].max())
             
             if abs(x_range[0]) > 1000:  # Likely projected coordinates
@@ -1127,7 +1104,7 @@ def load_data():
     else:
         candidates_gdf = gpd.GeoDataFrame(candidates_df, geometry='geometry', crs="EPSG:4326")
     
-    # Ensure consistent coordinate reference system
+    # Ensure consistent CRS
     if existing_facilities.crs != candidates_gdf.crs:
         print(f"Converting existing facilities CRS from {existing_facilities.crs} to {candidates_gdf.crs}")
         existing_facilities = existing_facilities.to_crs(candidates_gdf.crs)
@@ -1152,8 +1129,11 @@ def load_data():
     print(f"Filtered out {type_filtered} inappropriate facility types")
     print(f"Final candidate count: {len(candidates_gdf)}")
     
-    # Load traffic segments with FHWA-derived parameters
-    traffic_segments = load_traffic_segments()
+    # Load REAL traffic segments
+    traffic_segments = load_real_traffic_segments()
+    if traffic_segments is None:
+        print("Error: Failed to load traffic segments")
+        return None, None, None
     
     # Load county boundary data (optional)
     counties_gdf = load_county_data()
@@ -1161,72 +1141,58 @@ def load_data():
     # Add location information to candidates
     candidates_gdf = add_location_info_to_candidates(candidates_gdf, counties_gdf)
     
-    # Calculate development costs with capacity capping
+    # Calculate development costs
     candidates_gdf = calculate_development_costs(candidates_gdf)
     
     return candidates_gdf, existing_facilities, traffic_segments
 
-# DIAGNOSTIC FUNCTIONS
+# =============================================================================
+# OPTIMIZATION ENGINE - CORRECTED VERSION
+# =============================================================================
 
-def debug_facility_choice_enhanced(candidate_idx, all_facilities, candidates_gdf, traffic_segments, 
-                                 lp_calculator, current_facilities, current_facility_types, 
-                                 candidate_start_idx, budget_remaining, proximity_analyzer):
-    """Debug version of facility choice optimization with detailed logging"""
-    print(f"\n    DEBUG FACILITY CHOICE for candidate {candidate_idx}:")
+def facility_choice_optimization(candidate_idx, all_facilities, candidates_gdf, traffic_segments, 
+                                lp_calculator, current_facilities, current_facility_types, 
+                                candidate_start_idx, budget_remaining, proximity_analyzer):
+    """Optimized facility choice with real demand analysis and proximity intelligence"""
     
     # Get candidate information
     candidate_original_idx = candidate_idx - candidate_start_idx
     if candidate_original_idx < 0 or candidate_original_idx >= len(candidates_gdf):
-        print(f"      ERROR: Invalid candidate index {candidate_original_idx}")
         return None
     
     candidate_row = candidates_gdf.iloc[candidate_original_idx]
     candidate_lat = candidate_row.geometry.y
     candidate_lon = candidate_row.geometry.x
     
-    print(f"      Location: ({candidate_lat:.4f}, {candidate_lon:.4f})")
-    print(f"      Original capacity: {candidate_row['capacity_value']}")
-    print(f"      No service cost: ${candidate_row['cost_no_service']/1e6:.2f}M")
-    print(f"      Full service cost: ${candidate_row['cost_full_service']/1e6:.2f}M")
-    print(f"      Budget remaining: ${budget_remaining/1e6:.2f}M")
-    
-    # Check budget constraints
+    # Check budget constraints first
     if candidate_row['cost_no_service'] > budget_remaining and candidate_row['cost_full_service'] > budget_remaining:
-        print(f"      REJECTED: Both options exceed budget")
-        return None
+        return None  # Neither option is affordable
     
-    # Step 1: Analyze local demand patterns
+    # Step 1: Analyze local demand patterns using REAL traffic data
     try:
-        print(f"      Analyzing demand patterns...")
         demand_analysis = analyze_demand_patterns(candidate_lat, candidate_lon, traffic_segments)
-        print(f"      Demand recommendation: {demand_analysis['recommended_type']} (confidence: {demand_analysis['confidence']:.3f})")
-        print(f"      Demand reasoning: {demand_analysis['reasoning']}")
     except Exception as e:
-        print(f"      ERROR in demand analysis: {e}")
+        print(f"Error in demand analysis: {e}")
         return None
     
     # Step 2: Analyze local infrastructure
     try:
-        print(f"      Analyzing proximity...")
         proximity_analysis = proximity_analyzer.analyze_local_infrastructure(
             candidate_lat, candidate_lon, current_facility_types
         )
-        print(f"      Proximity recommendation: {proximity_analysis['recommended_type']} (confidence: {proximity_analysis['confidence']:.3f})")
-        print(f"      Proximity reasoning: {proximity_analysis['reasoning']}")
     except Exception as e:
-        print(f"      ERROR in proximity analysis: {e}")
+        print(f"Error in proximity analysis: {e}")
         return None
     
-    # Step 3: Integrate analyses
+    # Step 3: Integrate analyses with weighted decision making
     if demand_analysis['recommended_type'] == proximity_analysis['recommended_type']:
         selected_facility_type = demand_analysis['recommended_type']
         decision_confidence = min(0.95, (demand_analysis['confidence'] + proximity_analysis['confidence']) / 2 + 0.2)
         decision_reasoning = f"Both analyses agree: {demand_analysis['recommended_type']}"
-        print(f"      DECISION: Both agree on {selected_facility_type} (confidence: {decision_confidence:.3f})")
     else:
-        # Use weighted decision
-        demand_weight = 0.6
-        proximity_weight = 0.4
+        # Use weighted decision - prioritize demand analysis for real data-driven decisions
+        demand_weight = 0.7  # Increased weight for demand analysis
+        proximity_weight = 0.3
         
         if (demand_analysis['confidence'] * demand_weight) > (proximity_analysis['confidence'] * proximity_weight):
             selected_facility_type = demand_analysis['recommended_type']
@@ -1236,10 +1202,8 @@ def debug_facility_choice_enhanced(candidate_idx, all_facilities, candidates_gdf
             selected_facility_type = proximity_analysis['recommended_type']
             decision_confidence = proximity_analysis['confidence'] * 0.8
             decision_reasoning = f"Proximity analysis preferred: {proximity_analysis['recommended_type']}"
-        
-        print(f"      DECISION: Analyses disagree, chose {selected_facility_type} (confidence: {decision_confidence:.3f})")
     
-    # Step 4: Calculate costs and capacity
+    # Step 4: Calculate costs and capacity based on selected type
     if selected_facility_type == 'rest_area':
         cost = candidate_row['cost_no_service']
         effective_capacity = candidate_row['capped_capacity_no_service']
@@ -1249,22 +1213,15 @@ def debug_facility_choice_enhanced(candidate_idx, all_facilities, candidates_gdf
         effective_capacity = candidate_row['capped_capacity_full_service']
         service_level = 'Full Service'
     
-    print(f"      Selected config: {service_level} {selected_facility_type}")
-    print(f"      Cost: ${cost/1e6:.2f}M, Capacity: {effective_capacity}")
-    
-    # Check budget constraint
+    # Final budget check
     if cost > budget_remaining:
-        print(f"      REJECTED: Cost ${cost/1e6:.2f}M > Budget ${budget_remaining/1e6:.2f}M")
         return None
     
-    # Step 5: Calculate performance
+    # Step 5: Calculate performance using REAL unmet demand
     try:
-        print(f"      Calculating performance...")
-        
         # Get current unmet demand
         current_results = lp_calculator.calculate_unmet_demand_lp(current_facilities, current_facility_types)
         current_unmet = current_results.get('unmet_total', 0)
-        print(f"      Current unmet demand: {current_unmet:.1f}")
         
         # Test with this facility
         original_capacity = all_facilities.loc[candidate_idx, 'capacity']
@@ -1284,10 +1241,6 @@ def debug_facility_choice_enhanced(candidate_idx, all_facilities, candidates_gdf
         demand_reduction = max(0, current_unmet - test_unmet)
         cost_effectiveness = demand_reduction / cost if cost > 0 else 0
         
-        print(f"      Test unmet demand: {test_unmet:.1f}")
-        print(f"      Demand reduction: {demand_reduction:.1f}")
-        print(f"      Cost effectiveness: {cost_effectiveness:.6f}")
-        
         # Calculate class-specific reductions
         class_reductions = {}
         for class_id in range(1, 5):
@@ -1295,7 +1248,7 @@ def debug_facility_choice_enhanced(candidate_idx, all_facilities, candidates_gdf
             test_class = test_results.get(f'unmet_class_{class_id}', 0)
             class_reductions[f'class_{class_id}_reduction'] = max(0, current_class - test_class)
         
-        # Calculate composite score
+        # Calculate composite score with facility type appropriateness
         secondary_factors = [
             candidate_row.get('crash_risk_norm', 0.5),
             candidate_row.get('accessibility_norm', 0.5),
@@ -1304,18 +1257,36 @@ def debug_facility_choice_enhanced(candidate_idx, all_facilities, candidates_gdf
         ]
         secondary_score = sum(secondary_factors) / len(secondary_factors)
         
-        if current_unmet > 0:
-            demand_score = min(1.0, demand_reduction / (current_unmet * 0.1))
+        # Facility-type-specific demand scoring
+        if selected_facility_type == 'rest_area':
+            relevant_reduction = class_reductions.get('class_1_reduction', 0) + class_reductions.get('class_3_reduction', 0)
+            relevant_total_unmet = current_results.get('unmet_class_1', 0) + current_results.get('unmet_class_3', 0)
+        else:  # truck_stop
+            relevant_reduction = class_reductions.get('class_2_reduction', 0) + class_reductions.get('class_4_reduction', 0)
+            relevant_total_unmet = current_results.get('unmet_class_2', 0) + current_results.get('unmet_class_4', 0)
+        
+        # Calculate facility-appropriate demand score
+        if relevant_total_unmet > 0:
+            facility_appropriate_score = min(1.0, relevant_reduction / (relevant_total_unmet * 0.03))
         else:
-            demand_score = 0
+            facility_appropriate_score = 0
         
-        confidence_boost = (decision_confidence - 0.5) * 0.1
-        composite_score = 0.5 * demand_score + 0.5 * secondary_score + confidence_boost
+        # Overall demand score
+        if current_unmet > 0:
+            overall_demand_score = min(1.0, demand_reduction / (current_unmet * 0.05))
+        else:
+            overall_demand_score = 0
         
-        print(f"      Demand score: {demand_score:.4f}")
-        print(f"      Secondary score: {secondary_score:.4f}")
-        print(f"      Confidence boost: {confidence_boost:.4f}")
-        print(f"      Composite score: {composite_score:.4f}")
+        # Combine scores
+        demand_score = 0.7 * facility_appropriate_score + 0.3 * overall_demand_score
+        
+        # Confidence boost
+        confidence_boost = (decision_confidence - 0.5) * 0.15
+        
+        # Enhanced composite score
+        composite_score = PRIMARY_WEIGHT * demand_score + SECONDARY_WEIGHT * secondary_score + confidence_boost
+        
+     
         
         # Return configuration
         return {
@@ -1334,115 +1305,70 @@ def debug_facility_choice_enhanced(candidate_idx, all_facilities, candidates_gdf
         }
         
     except Exception as e:
-        print(f"      ERROR calculating performance: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error calculating performance: {e}")
         return None
 
-def diagnostic_unified_budget_optimization(candidates_gdf, existing_facilities, traffic_segments, max_budget):
-    """Diagnostic version of unified optimization with extensive debugging"""
+def unified_budget_optimization(candidates_gdf, existing_facilities, traffic_segments, max_budget):
+    """Main optimization function using real traffic data and proper FHWA methodology"""
     print(f"\n{'='*80}")
-    print(f"DIAGNOSTIC UNIFIED OPTIMIZATION: ${max_budget/1e6:.0f}M Budget")
+    print(f"CORRECTED UNIFIED OPTIMIZATION: ${max_budget/1e6:.0f}M Budget")
     print('='*80)
-    
-    # DIAGNOSTIC 1: Input validation
-    print(f"DIAGNOSTIC 1 - INPUT VALIDATION:")
-    print(f"  Candidates: {len(candidates_gdf)}")
-    print(f"  Existing facilities: {len(existing_facilities)}")
-    print(f"  Traffic segments: {len(traffic_segments)}")
-    print(f"  Max budget: ${max_budget:,.0f}")
-    
-    if len(candidates_gdf) == 0:
-        print("  ERROR: No candidate facilities provided!")
-        return pd.DataFrame()
-    
-    # Check for required columns
-    required_candidate_cols = ['capacity_value', 'cost_no_service', 'cost_full_service']
-    missing_cols = [col for col in required_candidate_cols if col not in candidates_gdf.columns]
-    if missing_cols:
-        print(f"  ERROR: Missing candidate columns: {missing_cols}")
-        return pd.DataFrame()
-    
-    # DIAGNOSTIC 2: Cost analysis
-    print(f"\nDIAGNOSTIC 2 - COST ANALYSIS:")
-    print(f"  No service costs: ${candidates_gdf['cost_no_service'].min()/1e6:.2f}M to ${candidates_gdf['cost_no_service'].max()/1e6:.2f}M")
-    print(f"  Full service costs: ${candidates_gdf['cost_full_service'].min()/1e6:.2f}M to ${candidates_gdf['cost_full_service'].max()/1e6:.2f}M")
-    print(f"  Capacity range: {candidates_gdf['capacity_value'].min():.0f} to {candidates_gdf['capacity_value'].max():.0f}")
-    
-    # Check if any facilities are within budget
-    affordable_no_service = (candidates_gdf['cost_no_service'] <= max_budget).sum()
-    affordable_full_service = (candidates_gdf['cost_full_service'] <= max_budget).sum()
-    print(f"  Affordable no service facilities: {affordable_no_service}")
-    print(f"  Affordable full service facilities: {affordable_full_service}")
-    
-    if affordable_no_service == 0 and affordable_full_service == 0:
-        print("  ERROR: No facilities are affordable within budget!")
-        return pd.DataFrame()
     
     # Prepare facilities for optimization
     try:
-        print(f"\nDIAGNOSTIC 3 - FACILITY PREPARATION:")
         all_facilities, existing_facility_types, candidate_start_idx = prepare_facilities_for_optimization(
             candidates_gdf, existing_facilities, traffic_segments
         )
-        print(f"  ✓ Total facilities prepared: {len(all_facilities)}")
-        print(f"  ✓ Existing facilities: {candidate_start_idx}")
-        print(f"  ✓ Candidate facilities: {len(all_facilities) - candidate_start_idx}")
-        print(f"  ✓ Existing facility types: {len(existing_facility_types)}")
-        
-        # Show existing facility type distribution
-        if existing_facility_types:
-            type_counts = {}
-            for ftype in existing_facility_types.values():
-                type_counts[ftype] = type_counts.get(ftype, 0) + 1
-            print(f"  ✓ Existing type distribution: {type_counts}")
-        
+        print(f"✓ Prepared {len(all_facilities)} total facilities ({candidate_start_idx} existing, {len(all_facilities) - candidate_start_idx} candidates)")
     except Exception as e:
-        print(f"  ERROR in facility preparation: {e}")
-        import traceback
-        traceback.print_exc()
-        return pd.DataFrame()
+        print(f"ERROR in facility preparation: {e}")
+        return pd.DataFrame(), pd.DataFrame()
     
     # Initialize calculators
     try:
-        print(f"\nDIAGNOSTIC 4 - CALCULATOR INITIALIZATION:")
         lp_calculator = UnmetDemandCalculator(traffic_segments, all_facilities)
         proximity_analyzer = ProximityAnalyzer(all_facilities)
-        print(f"  ✓ LP calculator initialized")
-        print(f"  ✓ Proximity analyzer initialized")
+        print(f"✓ Calculators initialized with real traffic data")
         
-        # Test initial unmet demand calculation
-        print(f"  Testing baseline demand calculation...")
+        # Test baseline calculation
         baseline_results = lp_calculator.calculate_unmet_demand_lp([], {})
         baseline_unmet = baseline_results.get('unmet_total', 0)
-        print(f"  ✓ Baseline unmet demand: {baseline_unmet:.1f}")
+        print(f"✓ Baseline unmet demand: {baseline_unmet:.1f} trucks")
         
         if baseline_unmet <= 0:
-            print(f"  WARNING: Baseline unmet demand is {baseline_unmet}, this seems wrong!")
+            print(f"WARNING: No unmet demand found in baseline calculation")
         
     except Exception as e:
-        print(f"  ERROR in calculator initialization: {e}")
-        import traceback
-        traceback.print_exc()
-        return pd.DataFrame()
+        print(f"ERROR in calculator initialization: {e}")
+        return pd.DataFrame(), pd.DataFrame()
     
     # Initialize optimization state
-    print(f"\nDIAGNOSTIC 5 - OPTIMIZATION INITIALIZATION:")
-    current_facilities = [idx for idx in range(candidate_start_idx)]
+    current_facilities = list(range(candidate_start_idx))
     current_facility_types = existing_facility_types.copy()
     remaining_candidates = list(range(candidate_start_idx, len(all_facilities)))
     
-    print(f"  ✓ Starting facilities: {len(current_facilities)}")
-    print(f"  ✓ Remaining candidates: {len(remaining_candidates)}")
+    print(f"✓ Optimization state initialized:")
+    print(f"  Current facilities (existing): {len(current_facilities)}")
+    print(f"  Current facility types: {len(current_facility_types)} mapped")
+    print(f"  Remaining candidates: {len(remaining_candidates)}")
     
     # Calculate initial state
     try:
         initial_results = lp_calculator.calculate_unmet_demand_lp(current_facilities, current_facility_types)
         initial_unmet = initial_results.get('unmet_total', 0)
-        print(f"  ✓ Initial unmet demand with existing facilities: {initial_unmet:.1f}")
-        print(f"  ✓ Demand reduction from existing: {baseline_unmet - initial_unmet:.1f}")
+        
+        print(f"✓ Initial unmet demand with existing facilities: {initial_unmet:.1f} trucks")
+        print(f"✓ Existing facilities reduce demand by: {baseline_unmet - initial_unmet:.1f} trucks")
+        
+        # Debug: Show class-wise unmet demand
+        for class_id in range(1, 5):
+            class_unmet = initial_results.get(f'unmet_class_{class_id}', 0)
+            print(f"  Class {class_id} unmet: {class_unmet:.1f} trucks")
+        
     except Exception as e:
-        print(f"  ERROR calculating initial state: {e}")
+        print(f"ERROR calculating initial state: {e}")
+        import traceback
+        traceback.print_exc()
         initial_unmet = baseline_unmet
     
     # Track optimization progress
@@ -1451,120 +1377,67 @@ def diagnostic_unified_budget_optimization(candidates_gdf, existing_facilities, 
     cumulative_capacity = 0
     selection_count = 0
     
-    print(f"\nDIAGNOSTIC 6 - OPTIMIZATION LOOP:")
-    print(f"Starting main optimization loop...")
+    # Track budget progression
+    budget_progression = [{
+        'budget_used': 0,
+        'cumulative_capacity': 0,
+        'facilities_count': len(current_facilities),
+        'unmet_class_1': initial_results.get('unmet_class_1', 0),
+        'unmet_class_2': initial_results.get('unmet_class_2', 0),
+        'unmet_class_3': initial_results.get('unmet_class_3', 0),
+        'unmet_class_4': initial_results.get('unmet_class_4', 0),
+        'unmet_total': initial_unmet,
+        'facility_added': 'baseline'
+    }]
     
-    # Diagnostic counters
-    iterations_without_selection = 0
-    max_iterations = min(100, len(remaining_candidates))  # Safety limit
+    print(f"\nStarting optimization with {len(remaining_candidates)} candidates...")
     
-    # Main optimization loop with enhanced debugging
+    # Main optimization loop
+    max_iterations = min(50, len(remaining_candidates))
+    
     for iteration in range(max_iterations):
         if not remaining_candidates or cumulative_budget >= max_budget:
-            print(f"  Loop exit: remaining_candidates={len(remaining_candidates)}, budget_used=${cumulative_budget/1e6:.1f}M")
             break
         
         budget_remaining = max_budget - cumulative_budget
+        print(f"\nIteration {iteration + 1}: Budget remaining ${budget_remaining/1e6:.2f}M, Candidates: {len(remaining_candidates)}")
         
-        print(f"\n  --- ITERATION {iteration + 1} ---")
-        print(f"  Budget remaining: ${budget_remaining/1e6:.2f}M")
-        print(f"  Candidates remaining: {len(remaining_candidates)}")
-        print(f"  Facilities selected so far: {selection_count}")
-        
-        # Test first few candidates in detail
+        # Evaluate candidates
         candidate_evaluations = []
-        candidates_tested = 0
-        candidates_affordable = 0
-        candidates_valid_config = 0
         
-        for i, candidate_idx in enumerate(remaining_candidates[:10]):  # Test first 10 in detail
-            candidates_tested += 1
-            
-            # Get candidate info
-            candidate_original_idx = candidate_idx - candidate_start_idx
-            candidate_row = candidates_gdf.iloc[candidate_original_idx]
-            
-            # Check affordability
-            min_cost = min(candidate_row['cost_no_service'], candidate_row['cost_full_service'])
-            if min_cost <= budget_remaining:
-                candidates_affordable += 1
+        for candidate_idx in remaining_candidates:
+            try:
+                config = facility_choice_optimization(
+                    candidate_idx, all_facilities, candidates_gdf, traffic_segments,
+                    lp_calculator, current_facilities, current_facility_types,
+                    candidate_start_idx, budget_remaining, proximity_analyzer
+                )
                 
-                try:
-                    config = debug_facility_choice_enhanced(
-                        candidate_idx, all_facilities, candidates_gdf, traffic_segments,
-                        lp_calculator, current_facilities, current_facility_types,
-                        candidate_start_idx, budget_remaining, proximity_analyzer
-                    )
-                    
-                    if config is not None:
-                        candidates_valid_config += 1
-                        candidate_evaluations.append({
-                            'candidate_idx': candidate_idx,
-                            'config': config
-                        })
-                        
-                        # Show details for first few candidates
-                        if i < 3:
-                            print(f"    Candidate {i+1}: Type={config['facility_type']}, Cost=${config['cost']/1e6:.2f}M, Score={config['composite_score']:.4f}")
-                    else:
-                        if i < 3:
-                            print(f"    Candidate {i+1}: Returned None (likely budget/evaluation issue)")
-                            
-                except Exception as e:
-                    print(f"    ERROR evaluating candidate {i+1}: {e}")
-            else:
-                if i < 3:
-                    print(f"    Candidate {i+1}: Too expensive (${min_cost/1e6:.2f}M > ${budget_remaining/1e6:.2f}M)")
+                if config is not None:
+                    candidate_evaluations.append({
+                        'candidate_idx': candidate_idx,
+                        'config': config
+                    })
+            except:
+                continue
         
-        print(f"  Diagnostic summary: {candidates_tested} tested, {candidates_affordable} affordable, {candidates_valid_config} valid configs")
-        
-        # If we tested only first 10, evaluate all remaining quickly
-        if len(remaining_candidates) > 10:
-            print(f"  Evaluating remaining {len(remaining_candidates) - 10} candidates...")
-            for candidate_idx in remaining_candidates[10:]:
-                try:
-                    config = debug_facility_choice_enhanced(
-                        candidate_idx, all_facilities, candidates_gdf, traffic_segments,
-                        lp_calculator, current_facilities, current_facility_types,
-                        candidate_start_idx, budget_remaining, proximity_analyzer
-                    )
-                    
-                    if config is not None:
-                        candidate_evaluations.append({
-                            'candidate_idx': candidate_idx,
-                            'config': config
-                        })
-                except:
-                    continue  # Skip failed evaluations
-        
-        print(f"  Total valid configurations: {len(candidate_evaluations)}")
+        if not candidate_evaluations:
+            print(f"No valid candidates found - stopping optimization")
+            break
         
         # Select the best candidate
-        if not candidate_evaluations:
-            print(f"  No valid candidates found in iteration {iteration + 1}")
-            iterations_without_selection += 1
-            if iterations_without_selection >= 3:
-                print(f"  Stopping: 3 consecutive iterations without valid candidates")
-                break
-            continue
-        
-        # Reset no-selection counter
-        iterations_without_selection = 0
-        
-        # Sort by composite score and select best
         candidate_evaluations.sort(key=lambda x: x['config']['composite_score'], reverse=True)
         best_candidate = candidate_evaluations[0]
         
         selected_idx = best_candidate['candidate_idx']
         best_config = best_candidate['config']
         
-        print(f"  SELECTED: Index {selected_idx}")
-        print(f"    Type: {best_config['facility_type']}")
-        print(f"    Service: {best_config['service_level']}")
-        print(f"    Cost: ${best_config['cost']/1e6:.2f}M")
-        print(f"    Score: {best_config['composite_score']:.4f}")
-        print(f"    Demand reduction: {best_config['demand_reduction']:.1f}")
-        print(f"    Confidence: {best_config['decision_confidence']:.3f}")
+        # Minimum score threshold
+        if best_config['composite_score'] < 0.001:
+            print(f"Best score {best_config['composite_score']:.6f} below threshold - stopping")
+            break
+        
+        print(f"  Selected facility {selected_idx}: {best_config['facility_type']} - Score: {best_config['composite_score']:.4f}")
         
         # Add the selected facility
         selection_count += 1
@@ -1581,12 +1454,46 @@ def diagnostic_unified_budget_optimization(candidates_gdf, existing_facilities, 
         current_facility_types[selected_idx] = best_config['facility_type']
         remaining_candidates.remove(selected_idx)
         
+        # Calculate updated unmet demand
+        try:
+            updated_results = lp_calculator.calculate_unmet_demand_lp(current_facilities, current_facility_types)
+            updated_unmet = updated_results.get('unmet_total', 0)
+            
+            # Track budget progression
+            budget_progression.append({
+                'budget_used': cumulative_budget,
+                'cumulative_capacity': cumulative_capacity,
+                'facilities_count': len(current_facilities),
+                'unmet_class_1': updated_results.get('unmet_class_1', 0),
+                'unmet_class_2': updated_results.get('unmet_class_2', 0),
+                'unmet_class_3': updated_results.get('unmet_class_3', 0),
+                'unmet_class_4': updated_results.get('unmet_class_4', 0),
+                'unmet_total': updated_unmet,
+                'facility_added': candidate_row.get('ComplexNam', f'Facility_{selected_idx}')
+            })
+            
+            print(f"    Updated unmet demand: {updated_unmet:.1f} trucks (reduction: {initial_unmet - updated_unmet:.1f})")
+            
+        except Exception as e:
+            print(f"    Error calculating updated unmet demand: {e}")
+        
+        # Get county information
+        facility_county = candidate_row.get('county', 'Unknown')
+        if facility_county == 'Unknown':
+            lat, lon = candidate_row.geometry.y, candidate_row.geometry.x
+            nearby_segments = traffic_segments[
+                (abs(traffic_segments['Latitude'] - lat) < 0.1) & 
+                (abs(traffic_segments['Longitude'] - lon) < 0.1)
+            ]
+            if len(nearby_segments) > 0:
+                facility_county = nearby_segments.iloc[0]['assigned_county']
+        
         # Record selection
         selection_record = {
             'Selection_Order': selection_count,
             'FID': candidate_row.get('FID', selected_idx),
             'Facility_Name': candidate_row.get('ComplexNam', f'Facility_{selected_idx}'),
-            'County': candidate_row.get('county', 'Unknown'),
+            'County': facility_county,
             'City': candidate_row.get('city', 'Unknown'),
             'Service_Level': best_config['service_level'],
             'Facility_Type': best_config['facility_type'],
@@ -1609,61 +1516,48 @@ def diagnostic_unified_budget_optimization(candidates_gdf, existing_facilities, 
             for class_key, reduction_value in best_config['class_reductions'].items():
                 selection_record[class_key] = reduction_value
         
+        # Add current unmet demand levels
+        try:
+            selection_record['current_unmet_class_1'] = updated_results.get('unmet_class_1', 0)
+            selection_record['current_unmet_class_2'] = updated_results.get('unmet_class_2', 0)
+            selection_record['current_unmet_class_3'] = updated_results.get('unmet_class_3', 0)
+            selection_record['current_unmet_class_4'] = updated_results.get('unmet_class_4', 0)
+            selection_record['current_unmet_total'] = updated_results.get('unmet_total', 0)
+        except:
+            pass
+        
         selections.append(selection_record)
-        
-        print(f"    Cumulative: ${cumulative_budget/1e6:.2f}M budget, {cumulative_capacity} capacity")
-        
-        # Check for low scores (stopping criterion)
-        if best_config['composite_score'] < 0.001:
-            print(f"  Stopping: Score {best_config['composite_score']:.6f} below threshold 0.001")
-            break
     
-    # Create results DataFrame
+    # Create results DataFrames
     results_df = pd.DataFrame(selections)
+    budget_progression_df = pd.DataFrame(budget_progression)
     
-    print(f"\nDIAGNOSTIC 7 - FINAL RESULTS:")
+    print(f"\nOptimization Complete:")
     print(f"  Facilities selected: {len(results_df)}")
     if len(results_df) > 0:
         print(f"  Budget used: ${cumulative_budget/1e6:.2f}M ({cumulative_budget/max_budget*100:.1f}%)")
         print(f"  Capacity added: {cumulative_capacity:,}")
         print(f"  Average score: {results_df['Composite_Score'].mean():.4f}")
         
-        # Service and type distribution
-        if 'Service_Level' in results_df.columns:
-            service_dist = results_df['Service_Level'].value_counts().to_dict()
-            print(f"  Service distribution: {service_dist}")
-        
+        # Show type distribution
         if 'Facility_Type' in results_df.columns:
             type_dist = results_df['Facility_Type'].value_counts().to_dict()
             print(f"  Type distribution: {type_dist}")
         
-        # Show first few selections
-        print(f"\nFirst 5 selections:")
-        for i in range(min(5, len(results_df))):
-            row = results_df.iloc[i]
-            print(f"  {i+1}. {row['Facility_Name']} - {row['Facility_Type']} - ${row['Cost']/1e6:.2f}M - Score: {row['Composite_Score']:.4f}")
-    else:
-        print(f"  ERROR: No facilities were selected!")
-        
-        # Diagnose why no facilities were selected
-        print(f"\nDIAGNOSTIC - Why no facilities selected:")
-        print(f"  Total candidates: {len(candidates_gdf)}")
-        print(f"  Budget: ${max_budget/1e6:.0f}M")
-        print(f"  Cheapest no-service: ${candidates_gdf['cost_no_service'].min()/1e6:.2f}M")
-        print(f"  Cheapest full-service: ${candidates_gdf['cost_full_service'].min()/1e6:.2f}M")
-        
-        # Check first candidate manually
-        if len(candidates_gdf) > 0:
-            first_candidate = candidates_gdf.iloc[0]
-            print(f"  First candidate cost analysis:")
-            print(f"    No service: ${first_candidate['cost_no_service']/1e6:.2f}M")
-            print(f"    Full service: ${first_candidate['cost_full_service']/1e6:.2f}M")
-            print(f"    Capacity: {first_candidate['capacity_value']}")
+        # Show county distribution
+        if 'County' in results_df.columns:
+            county_dist = results_df['County'].value_counts().head(5).to_dict()
+            print(f"  Top counties: {county_dist}")
     
-    return results_df
+    return results_df, budget_progression_df
+    
 
-def create_diagnostic_plots(results, budget_scenario, output_folder):
-    """Create diagnostic plots for the optimization results"""
+# =============================================================================
+# VISUALIZATION AND REPORTING
+# =============================================================================
+
+def create_optimization_plots(results, budget_scenario, output_folder):
+    """Create visualization plots for optimization results"""
     
     if len(results) == 0:
         print("No results to plot")
@@ -1671,10 +1565,10 @@ def create_diagnostic_plots(results, budget_scenario, output_folder):
     
     try:
         # Create figure with subplots
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle(f'Diagnostic Analysis - ${budget_scenario/1e6:.0f}M Budget Scenario', fontsize=16, fontweight='bold')
+        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(16, 18))
+        fig.suptitle(f'Corrected Optimization Results - ${budget_scenario/1e6:.0f}M Budget', fontsize=16, fontweight='bold')
         
-        # Plot 1: Facilities vs Budget (Step Plot)
+        # Plot 1: Budget utilization
         ax1.step(results['Cumulative_Budget'] / 1e6, results['Selection_Order'], 
                 where='post', linewidth=2.5, color='blue', marker='o', markersize=4)
         ax1.set_xlabel('Budget ($ Millions)')
@@ -1682,7 +1576,7 @@ def create_diagnostic_plots(results, budget_scenario, output_folder):
         ax1.set_title('Facilities Selected vs Budget', fontweight='bold')
         ax1.grid(True, alpha=0.3)
         
-        # Plot 2: Cumulative Capacity vs Budget (Step Plot)
+        # Plot 2: Capacity growth
         ax2.step(results['Cumulative_Budget'] / 1e6, results['Cumulative_Capacity'], 
                 where='post', linewidth=2.5, color='green', marker='s', markersize=4)
         ax2.set_xlabel('Budget ($ Millions)')
@@ -1690,7 +1584,7 @@ def create_diagnostic_plots(results, budget_scenario, output_folder):
         ax2.set_title('Capacity Added vs Budget', fontweight='bold')
         ax2.grid(True, alpha=0.3)
         
-        # Plot 3: Facility Type Distribution
+        # Plot 3: Facility type distribution
         if 'Facility_Type' in results.columns:
             type_counts = results['Facility_Type'].value_counts()
             colors = ['lightcoral', 'lightblue']
@@ -1698,7 +1592,7 @@ def create_diagnostic_plots(results, budget_scenario, output_folder):
                                               autopct='%1.1f%%', colors=colors, startangle=90)
             ax3.set_title('Facility Type Distribution', fontweight='bold')
         
-        # Plot 4: Composite Score Evolution
+        # Plot 4: Performance metrics
         ax4.plot(results['Selection_Order'], results['Composite_Score'], 
                 'o-', linewidth=2, markersize=6, color='red')
         ax4.set_xlabel('Selection Order')
@@ -1706,157 +1600,165 @@ def create_diagnostic_plots(results, budget_scenario, output_folder):
         ax4.set_title('Composite Score Evolution', fontweight='bold')
         ax4.grid(True, alpha=0.3)
         
+        # Plot 5: Cumulative Unmet Demand Reduction by Class vs Budget
+        ax5.set_title('Cumulative Unmet Demand Reduction by Class vs Budget', fontweight='bold')
+        
+        class_columns = [col for col in results.columns if col.startswith('class_') and col.endswith('_reduction')]
+        
+        if class_columns:
+            class_styles = {
+                'class_1_reduction': {'color': '#1f77b4', 'linestyle': '-', 'label': 'Class 1 (SH Rest Area)'},
+                'class_2_reduction': {'color': '#ff7f0e', 'linestyle': '--', 'label': 'Class 2 (SH Truck Stop)'},
+                'class_3_reduction': {'color': '#2ca02c', 'linestyle': '-.', 'label': 'Class 3 (LH Rest Area)'},
+                'class_4_reduction': {'color': '#d62728', 'linestyle': ':', 'label': 'Class 4 (LH Truck Stop)'}
+            }
+            
+            for class_col in class_columns:
+                if class_col in class_styles and class_col in results.columns:
+                    cumulative_reduction = results[class_col].cumsum()
+                    
+                    ax5.step(results['Cumulative_Budget'] / 1e6, cumulative_reduction,
+                            where='post', linewidth=2.5,
+                            color=class_styles[class_col]['color'],
+                            linestyle=class_styles[class_col]['linestyle'],
+                            label=class_styles[class_col]['label'],
+                            marker='o', markersize=3)
+            
+            ax5.set_xlabel('Budget ($ Millions)')
+            ax5.set_ylabel('Cumulative Unmet Demand Reduction (trucks)')
+            ax5.legend()
+            ax5.grid(True, alpha=0.3)
+        else:
+            ax5.text(0.5, 0.5, 'No class reduction data available', 
+                    ha='center', va='center', transform=ax5.transAxes, fontsize=12)
+        
+        # Plot 6: Individual Facility Demand Reduction by Class
+        ax6.set_title('Individual Facility Demand Reduction by Class', fontweight='bold')
+        
+        if class_columns:
+            x = range(len(results))
+            width = 0.8
+            
+            # Prepare data for stacking
+            class_1_values = results.get('class_1_reduction', [0] * len(results)).fillna(0)
+            class_2_values = results.get('class_2_reduction', [0] * len(results)).fillna(0)
+            class_3_values = results.get('class_3_reduction', [0] * len(results)).fillna(0)
+            class_4_values = results.get('class_4_reduction', [0] * len(results)).fillna(0)
+            
+            # Create stacked bars
+            p1 = ax6.bar(x, class_1_values, width, label='Class 1 (SH Rest Area)', 
+                        color=class_styles['class_1_reduction']['color'], alpha=0.8)
+            p2 = ax6.bar(x, class_2_values, width, bottom=class_1_values, 
+                        label='Class 2 (SH Truck Stop)', 
+                        color=class_styles['class_2_reduction']['color'], alpha=0.8)
+            
+            bottom_3 = class_1_values + class_2_values
+            p3 = ax6.bar(x, class_3_values, width, bottom=bottom_3, 
+                        label='Class 3 (LH Rest Area)', 
+                        color=class_styles['class_3_reduction']['color'], alpha=0.8)
+            
+            bottom_4 = bottom_3 + class_3_values
+            p4 = ax6.bar(x, class_4_values, width, bottom=bottom_4, 
+                        label='Class 4 (LH Truck Stop)', 
+                        color=class_styles['class_4_reduction']['color'], alpha=0.8)
+            
+            ax6.set_xlabel('Facility Selection Order')
+            ax6.set_ylabel('Demand Reduction (trucks)')
+            ax6.legend()
+            ax6.grid(True, alpha=0.3, axis='y')
+            
+            # Add facility names as x-tick labels
+            if len(results) <= 20:
+                facility_names = [name[:15] + '...' if len(name) > 15 else name 
+                                for name in results['Facility_Name']]
+                ax6.set_xticks(x)
+                ax6.set_xticklabels(facility_names, rotation=45, ha='right')
+            else:
+                ax6.set_xticks(x[::max(1, len(x)//10)])
+                ax6.set_xticklabels([f'F{i+1}' for i in x[::max(1, len(x)//10)]])
+        else:
+            ax6.text(0.5, 0.5, 'No class reduction data available', 
+                    ha='center', va='center', transform=ax6.transAxes, fontsize=12)
+        
         plt.tight_layout()
         
         # Save the plot
-        plot_file = os.path.join(output_folder, f"diagnostic_analysis_{budget_scenario/1e6:.0f}M.png")
+        plot_file = os.path.join(output_folder, f"corrected_optimization_{budget_scenario/1e6:.0f}M.png")
         plt.savefig(plot_file, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Diagnostic plot saved to: {plot_file}")
-        
-        # Create demand class analysis if data exists
-        create_demand_class_diagnostic_plots(results, budget_scenario, output_folder)
+        print(f"Optimization plot saved to: {plot_file}")
         
     except Exception as e:
-        print(f"Error creating diagnostic plots: {e}")
+        print(f"Error creating plots: {e}")
+        import traceback
+        traceback.print_exc()
 
-
-def create_demand_class_diagnostic_plots(results, budget_scenario, output_folder):
-    """Create demand class specific step plots"""
+def create_unmet_demand_vs_budget_plots(budget_progression, scenario_name, budget_scenario, output_folder):
+    """Create unmet demand vs budget plots for each class"""
+    
+    if len(budget_progression) == 0:
+        print("No budget progression data to plot")
+        return
     
     try:
-        # Check if demand class columns exist
-        class_columns = [col for col in results.columns if col.startswith('class_') and col.endswith('_reduction')]
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle(f'Unmet Demand vs Budget Progression - {scenario_name.title()} Scenario', fontsize=16, fontweight='bold')
         
-        if not class_columns:
-            print("No demand class reduction data found for plotting")
-            return
-        
-        # Define demand class information
+        # Class-specific plots
         class_info = {
-            'class_1_reduction': {'name': 'Short-Haul Rest Area', 'color': '#1f77b4', 'linestyle': '-'},
-            'class_2_reduction': {'name': 'Short-Haul Truck Stop', 'color': '#ff7f0e', 'linestyle': '--'},
-            'class_3_reduction': {'name': 'Long-Haul Rest Area', 'color': '#2ca02c', 'linestyle': '-.'},
-            'class_4_reduction': {'name': 'Long-Haul Truck Stop', 'color': '#d62728', 'linestyle': ':'}
+            1: {'name': 'Class 1 (Short-Haul Rest Area)', 'color': '#1f77b4'},
+            2: {'name': 'Class 2 (Short-Haul Truck Stop)', 'color': '#ff7f0e'},
+            3: {'name': 'Class 3 (Long-Haul Rest Area)', 'color': '#2ca02c'},
+            4: {'name': 'Class 4 (Long-Haul Truck Stop)', 'color': '#d62728'}
         }
         
-        # Create figure for demand class analysis
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle(f'Demand Class Analysis - ${budget_scenario/1e6:.0f}M Budget', fontsize=16, fontweight='bold')
+        axes = [ax1, ax2, ax3, ax4]
         
-        # Plot 1: Facilities serving each class vs budget
-        ax1.set_title('Facilities Serving Each Demand Class vs Budget', fontsize=12, fontweight='bold')
-        
-        for class_col in class_columns:
-            if class_col in class_info and class_col in results.columns:
-                # Count facilities that serve this class (have > 0 reduction)
-                facilities_serving_class = (results[class_col] > 0).cumsum()
-                
-                ax1.step(results['Cumulative_Budget'] / 1e6, facilities_serving_class,
-                        where='post', linewidth=2.5, 
-                        color=class_info[class_col]['color'],
-                        linestyle=class_info[class_col]['linestyle'],
-                        label=class_info[class_col]['name'])
-        
-        ax1.set_xlabel('Budget ($ Millions)')
-        ax1.set_ylabel('Number of Facilities Serving Class')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # Plot 2: Cumulative demand reduction by class vs budget
-        ax2.set_title('Cumulative Demand Reduction by Class vs Budget', fontsize=12, fontweight='bold')
-        
-        for class_col in class_columns:
-            if class_col in class_info and class_col in results.columns:
-                cumulative_reduction = results[class_col].cumsum()
-                
-                ax2.step(results['Cumulative_Budget'] / 1e6, cumulative_reduction,
-                        where='post', linewidth=2.5,
-                        color=class_info[class_col]['color'],
-                        linestyle=class_info[class_col]['linestyle'],
-                        label=class_info[class_col]['name'])
-        
-        ax2.set_xlabel('Budget ($ Millions)')
-        ax2.set_ylabel('Cumulative Demand Reduction')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        # Plot 3: Total demand reduction by class (bar chart)
-        ax3.set_title('Total Demand Reduction by Class', fontsize=12, fontweight='bold')
-        
-        class_names = []
-        total_reductions = []
-        colors = []
-        
-        for class_col in class_columns:
-            if class_col in class_info and class_col in results.columns:
-                class_names.append(class_info[class_col]['name'])
-                total_reductions.append(results[class_col].sum())
-                colors.append(class_info[class_col]['color'])
-        
-        if class_names:
-            bars = ax3.bar(range(len(class_names)), total_reductions, color=colors, alpha=0.8)
-            ax3.set_xticks(range(len(class_names)))
-            ax3.set_xticklabels(class_names, rotation=45, ha='right')
-            ax3.set_ylabel('Total Demand Reduction')
-            
-            # Add value labels on bars
-            for bar, value in zip(bars, total_reductions):
-                if value > 0:
-                    ax3.annotate(f'{value:.0f}',
-                               xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
-                               xytext=(0, 3), textcoords="offset points",
-                               ha='center', va='bottom')
-        
-        # Plot 4: Demand reduction efficiency per facility
-        ax4.set_title('Demand Reduction per Facility by Class', fontsize=12, fontweight='bold')
-        
-        efficiency_values = []
-        for class_col in class_columns:
-            if class_col in class_info and class_col in results.columns:
-                total_reduction = results[class_col].sum()
-                facilities_serving = (results[class_col] > 0).sum()
-                efficiency = total_reduction / facilities_serving if facilities_serving > 0 else 0
-                efficiency_values.append(efficiency)
-        
-        if class_names and efficiency_values:
-            bars = ax4.bar(range(len(class_names)), efficiency_values, color=colors, alpha=0.8)
-            ax4.set_xticks(range(len(class_names)))
-            ax4.set_xticklabels(class_names, rotation=45, ha='right')
-            ax4.set_ylabel('Avg Demand Reduction per Facility')
-            
-            # Add value labels
-            for bar, value in zip(bars, efficiency_values):
-                if value > 0:
-                    ax4.annotate(f'{value:.1f}',
-                               xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
-                               xytext=(0, 3), textcoords="offset points",
-                               ha='center', va='bottom')
+        for class_id, ax in zip([1, 2, 3, 4], axes):
+            class_col = f'unmet_class_{class_id}'
+            if class_col in budget_progression.columns:
+                ax.plot(budget_progression['budget_used'] / 1e6, budget_progression[class_col],
+                       'o-', linewidth=2.5, markersize=4, 
+                       color=class_info[class_id]['color'])
+                ax.set_title(class_info[class_id]['name'], fontweight='bold')
+                ax.set_xlabel('Budget Used ($ Millions)')
+                ax.set_ylabel('Unmet Demand (trucks)')
+                ax.grid(True, alpha=0.3)
+            else:
+                ax.text(0.5, 0.5, f'No data for {class_info[class_id]["name"]}', 
+                       ha='center', va='center', transform=ax.transAxes)
         
         plt.tight_layout()
         
-        # Save the demand class plot
-        plot_file = os.path.join(output_folder, f"demand_class_analysis_{budget_scenario/1e6:.0f}M.png")
+        plot_file = os.path.join(output_folder, f"unmet_demand_vs_budget_{scenario_name}_{budget_scenario/1e6:.0f}M.png")
         plt.savefig(plot_file, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Demand class analysis plot saved to: {plot_file}")
+        print(f"Unmet demand vs budget plot saved to: {plot_file}")
         
     except Exception as e:
-        print(f"Error creating demand class plots: {e}")
-
+        print(f"Error creating unmet demand vs budget plots: {e}")
 
 def create_summary_report(results, budget_scenario, output_folder):
     """Create a text summary report of the optimization results"""
     
     try:
-        report_file = os.path.join(output_folder, f"optimization_summary_{budget_scenario/1e6:.0f}M.txt")
+        report_file = os.path.join(output_folder, f"corrected_optimization_summary_{budget_scenario/1e6:.0f}M.txt")
         
         with open(report_file, 'w') as f:
             f.write("="*80 + "\n")
-            f.write(f"OPTIMIZATION SUMMARY REPORT - ${budget_scenario/1e6:.0f}M BUDGET\n")
+            f.write(f"CORRECTED OPTIMIZATION SUMMARY REPORT - ${budget_scenario/1e6:.0f}M BUDGET\n")
             f.write("="*80 + "\n\n")
+            
+            f.write("METHODOLOGY IMPROVEMENTS:\n")
+            f.write("  ✓ Real traffic data from GPKG files\n")
+            f.write("  ✓ FHWA MILP demand calculation methodology\n")
+            f.write("  ✓ Removed all random data generation\n")
+            f.write("  ✓ County assignment via RouteID mapping\n")
+            f.write("  ✓ Interstate assignment from data fields\n")
+            f.write("  ✓ Class-specific demand calculation (1-4)\n")
+            f.write("  ✓ Enhanced facility type assignment\n\n")
             
             if len(results) > 0:
                 f.write(f"OVERALL RESULTS:\n")
@@ -1905,23 +1807,28 @@ def create_summary_report(results, budget_scenario, output_folder):
                 
             else:
                 f.write("NO FACILITIES SELECTED\n")
-                f.write("Check diagnostic output for issues\n")
+                f.write("Check optimization parameters and data quality\n")
         
         print(f"Summary report saved to: {report_file}")
         
     except Exception as e:
         print(f"Error creating summary report: {e}")
 
-def main_diagnostic():
-    """Diagnostic version of main function"""
+# =============================================================================
+# MAIN EXECUTION FUNCTION
+# =============================================================================
+
+def main():
+    """Main execution function with corrected methodology"""
     print("=" * 80)
-    print("DIAGNOSTIC UNIFIED FACILITY OPTIMIZATION SYSTEM")
+    print("CORRECTED UNIFIED FACILITY OPTIMIZATION SYSTEM")
+    print("Using Real Traffic Data and FHWA Methodology")
     print("=" * 80)
     
     try:
-        # Load data
+        # Load real data
         print(f"\n{'='*60}")
-        print("DATA LOADING AND PREPARATION")
+        print("DATA LOADING WITH REAL SOURCES")
         print('='*60)
         
         candidates_gdf, existing_facilities, traffic_segments = load_data()
@@ -1930,83 +1837,98 @@ def main_diagnostic():
             print("ERROR: Failed to load required data. Exiting.")
             return
         
-        # Show current working directory and output paths
-        print(f"\nFile paths and locations:")
-        print(f"  Script location: {os.path.abspath(__file__)}")
-        print(f"  Current working directory: {os.getcwd()}")
+        print(f"\n✓ Data loaded successfully:")
+        print(f"  Candidates: {len(candidates_gdf)}")
+        print(f"  Existing facilities: {len(existing_facilities)}")
+        print(f"  Traffic segments: {len(traffic_segments)}")
+        print(f"  Total demand: {traffic_segments['demand_total'].sum():.0f} trucks")
         
         # Create output folders
-        output_folder = os.path.join(script_dir, "../results/diagnostic_optimization")
+        output_folder = os.path.join(script_dir, "../results/corrected_optimization")
         figures_folder = os.path.join(output_folder, "figures")
-        os.makedirs(output_folder, exist_ok=True)
-        os.makedirs(figures_folder, exist_ok=True)
+        Path(output_folder).mkdir(parents=True, exist_ok=True)
+        Path(figures_folder).mkdir(parents=True, exist_ok=True)
         
-        print(f"  Results will be saved to: {os.path.abspath(output_folder)}")
-        print(f"  Figures will be saved to: {os.path.abspath(figures_folder)}")
+        print(f"\n✓ Output folders created:")
+        print(f"  Results: {output_folder}")
+        print(f"  Figures: {figures_folder}")
         
-        # Run optimization for BOTH budget scenarios
+        # Run optimization for both budget scenarios
         results_dict = {}
+        budget_progression_dict = {}
         
         for scenario_name, budget in BUDGET_SCENARIOS.items():
             print(f"\n{'='*80}")
-            print(f"RUNNING DIAGNOSTIC OPTIMIZATION: {scenario_name.upper()} SCENARIO (${budget/1e6:.0f}M BUDGET)")
+            print(f"RUNNING CORRECTED OPTIMIZATION: {scenario_name.upper()} SCENARIO (${budget/1e6:.0f}M)")
             print('='*80)
             
-            scenario_results = diagnostic_unified_budget_optimization(
+            # Get both results and budget progression
+            scenario_results, budget_progression = unified_budget_optimization(
                 candidates_gdf, existing_facilities, traffic_segments, budget
             )
             
             # Store results
             results_dict[scenario_name] = scenario_results
+            budget_progression_dict[scenario_name] = budget_progression
             
-            # Save CSV results for this scenario
-            output_file = os.path.join(output_folder, f"diagnostic_optimization_{scenario_name}_{budget/1e6:.0f}M.csv")
+            # Save CSV results
+            output_file = os.path.join(output_folder, f"corrected_optimization_{scenario_name}_{budget/1e6:.0f}M.csv")
             scenario_results.to_csv(output_file, index=False)
-            print(f"\nCSV results saved to: {output_file}")
+            print(f"\n✓ Results saved: {output_file}")
             
-            # Create plots for this scenario
-            print(f"\nCreating visualizations for {scenario_name} scenario...")
-            create_diagnostic_plots(scenario_results, budget, figures_folder)
+            # Save budget progression
+            budget_progression_file = os.path.join(output_folder, f"budget_progression_{scenario_name}_{budget/1e6:.0f}M.csv")
+            budget_progression.to_csv(budget_progression_file, index=False)
+            print(f"✓ Budget progression saved: {budget_progression_file}")
+            
+            # Create visualizations
+            create_optimization_plots(scenario_results, budget, figures_folder)
             create_summary_report(scenario_results, budget, output_folder)
+            
+            # Create unmet demand vs budget plots
+            create_unmet_demand_vs_budget_plots(budget_progression, scenario_name, budget, figures_folder)
             
             # Scenario summary
             print(f"\n{'='*60}")
-            print(f"{scenario_name.upper()} SCENARIO SUMMARY (${budget/1e6:.0f}M)")
+            print(f"{scenario_name.upper()} SCENARIO SUMMARY")
             print('='*60)
             
             if len(scenario_results) > 0:
                 print(f"✓ SUCCESS: Selected {len(scenario_results)} facilities")
-                print(f"✓ Budget used: ${scenario_results['Cumulative_Budget'].iloc[-1]/1e6:.2f}M ({scenario_results['Cumulative_Budget'].iloc[-1]/budget*100:.1f}%)")
+                print(f"✓ Budget used: ${scenario_results['Cumulative_Budget'].iloc[-1]/1e6:.2f}M")
                 print(f"✓ Capacity added: {scenario_results['Cumulative_Capacity'].iloc[-1]:,}")
                 print(f"✓ Average score: {scenario_results['Composite_Score'].mean():.4f}")
                 
-                # Show service/type distribution
-                if 'Service_Level' in scenario_results.columns:
-                    service_dist = scenario_results['Service_Level'].value_counts()
-                    print(f"✓ Service levels: {dict(service_dist)}")
-                
+                # Show type distribution
                 if 'Facility_Type' in scenario_results.columns:
                     type_dist = scenario_results['Facility_Type'].value_counts()
-                    print(f"✓ Facility types: {dict(type_dist)}")
+                    print(f"✓ Types: {dict(type_dist)}")
+                
+                # Show county distribution
+                if 'County' in scenario_results.columns:
+                    county_dist = scenario_results['County'].value_counts().head(3)
+                    print(f"✓ Top counties: {dict(county_dist)}")
                     
-                # Show top 5 facilities for this scenario
-                print(f"\nTop 5 Selected Facilities:")
-                for i in range(min(5, len(scenario_results))):
+                # Show final unmet demand by class
+                if 'current_unmet_class_1' in scenario_results.columns:
+                    final_unmet = scenario_results.iloc[-1]
+                    print(f"✓ Final unmet demand:")
+                    print(f"  Class 1: {final_unmet.get('current_unmet_class_1', 0):.1f} trucks")
+                    print(f"  Class 2: {final_unmet.get('current_unmet_class_2', 0):.1f} trucks") 
+                    print(f"  Class 3: {final_unmet.get('current_unmet_class_3', 0):.1f} trucks")
+                    print(f"  Class 4: {final_unmet.get('current_unmet_class_4', 0):.1f} trucks")
+                    print(f"  Total: {final_unmet.get('current_unmet_total', 0):.1f} trucks")
+                    
+                # Show top 3 facilities
+                print(f"\nTop 3 Selected Facilities:")
+                for i in range(min(3, len(scenario_results))):
                     row = scenario_results.iloc[i]
-                    print(f"  {i+1}. {row['Facility_Name'][:25]:25s} | {row['County'][:12]:12s} | {row['Facility_Type']:10s} | ${row['Cost']/1e6:5.2f}M")
+                    print(f"  {i+1}. {row['Facility_Name'][:25]:25s} | {row['County']:15s} | {row['Facility_Type']:10s} | ${row['Cost']/1e6:5.2f}M")
                 
             else:
-                print("✗ FAILED: No facilities selected")
-                print("Check the diagnostic output above for specific issues")
+                print("✗ No facilities selected - check data and parameters")
         
-        # Create comparative analysis between scenarios
-        print(f"\n{'='*80}")
-        print("CREATING COMPARATIVE ANALYSIS")
-        print('='*80)
-        
-        create_comparative_analysis(results_dict, figures_folder)
-        
-        # Final summary comparing both scenarios
+        # Final comparative summary
         print(f"\n{'='*80}")
         print("FINAL COMPARATIVE SUMMARY")
         print('='*80)
@@ -2017,162 +1939,19 @@ def main_diagnostic():
             
             if len(results) > 0:
                 print(f"  ✓ Facilities: {len(results)}")
-                print(f"  ✓ Budget used: ${results['Cumulative_Budget'].iloc[-1]/1e6:.2f}M ({results['Cumulative_Budget'].iloc[-1]/budget*100:.1f}%)")
+                print(f"  ✓ Budget used: ${results['Cumulative_Budget'].iloc[-1]/1e6:.2f}M")
                 print(f"  ✓ Capacity: {results['Cumulative_Capacity'].iloc[-1]:,}")
                 print(f"  ✓ Avg score: {results['Composite_Score'].mean():.4f}")
-                
-                # Facility type breakdown
-                if 'Facility_Type' in results.columns:
-                    type_counts = results['Facility_Type'].value_counts()
-                    for ftype, count in type_counts.items():
-                        print(f"    • {ftype.replace('_', ' ').title()}: {count}")
             else:
                 print(f"  ✗ No facilities selected")
         
-        # List all saved files
-        print(f"\n{'='*80}")
-        print("ALL SAVED FILES")
-        print('='*80)
-        
-        print(f"📊 CSV Results:")
-        for scenario_name, budget in BUDGET_SCENARIOS.items():
-            csv_file = f"diagnostic_optimization_{scenario_name}_{budget/1e6:.0f}M.csv"
-            print(f"  • {csv_file}")
-        
-        print(f"\n📈 Diagnostic Plots:")
-        for scenario_name, budget in BUDGET_SCENARIOS.items():
-            main_plot = f"diagnostic_analysis_{budget/1e6:.0f}M.png"
-            class_plot = f"demand_class_analysis_{budget/1e6:.0f}M.png"
-            print(f"  • {main_plot}")
-            print(f"  • {class_plot}")
-        print(f"  • comparative_analysis.png")
-        
-        print(f"\n📄 Summary Reports:")
-        for scenario_name, budget in BUDGET_SCENARIOS.items():
-            report_file = f"optimization_summary_{budget/1e6:.0f}M.txt"
-            print(f"  • {report_file}")
-        
-        print(f"\n📁 All files located in: {os.path.abspath(output_folder)}")
-        print(f"📁 All plots located in: {os.path.abspath(figures_folder)}")
+        print(f"\n✓ All outputs saved to: {output_folder}")
+        print(f"✓ Methodology corrected: Real data, FHWA demand calculation, no random assumptions")
             
     except Exception as e:
-        print(f"CRITICAL ERROR in diagnostic execution: {e}")
+        print(f"CRITICAL ERROR: {e}")
         import traceback
         traceback.print_exc()
 
-
-def create_comparative_analysis(results_dict, figures_folder):
-    """Create comparative analysis plots between budget scenarios"""
-    
-    try:
-        current_results = results_dict.get('current', pd.DataFrame())
-        expanded_results = results_dict.get('expanded', pd.DataFrame())
-        
-        # Create comparative figure
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle('Comparative Analysis: $175M vs $1B Budget Scenarios', fontsize=16, fontweight='bold')
-        
-        # Plot 1: Facilities vs Budget comparison
-        ax1.set_title('Facilities Selected vs Budget', fontsize=12, fontweight='bold')
-        
-        if len(current_results) > 0:
-            ax1.step(current_results['Cumulative_Budget'] / 1e6, current_results['Selection_Order'], 
-                    where='post', linewidth=2.5, color='blue', label='$175M Budget', marker='o', markersize=4)
-        
-        if len(expanded_results) > 0:
-            ax1.step(expanded_results['Cumulative_Budget'] / 1e6, expanded_results['Selection_Order'], 
-                    where='post', linewidth=2.5, color='red', label='$1B Budget', marker='s', markersize=4)
-        
-        ax1.set_xlabel('Budget ($ Millions)')
-        ax1.set_ylabel('Number of Facilities')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # Plot 2: Capacity vs Budget comparison
-        ax2.set_title('Cumulative Capacity vs Budget', fontsize=12, fontweight='bold')
-        
-        if len(current_results) > 0:
-            ax2.step(current_results['Cumulative_Budget'] / 1e6, current_results['Cumulative_Capacity'], 
-                    where='post', linewidth=2.5, color='blue', label='$175M Budget', marker='o', markersize=4)
-        
-        if len(expanded_results) > 0:
-            ax2.step(expanded_results['Cumulative_Budget'] / 1e6, expanded_results['Cumulative_Capacity'], 
-                    where='post', linewidth=2.5, color='red', label='$1B Budget', marker='s', markersize=4)
-        
-        ax2.set_xlabel('Budget ($ Millions)')
-        ax2.set_ylabel('Cumulative Capacity (Spaces)')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        # Plot 3: Facility type comparison
-        ax3.set_title('Facility Type Distribution Comparison', fontsize=12, fontweight='bold')
-        
-        # Prepare data for comparison
-        scenarios = ['$175M Budget', '$1B Budget']
-        rest_area_counts = []
-        truck_stop_counts = []
-        
-        for results in [current_results, expanded_results]:
-            if len(results) > 0 and 'Facility_Type' in results.columns:
-                type_counts = results['Facility_Type'].value_counts()
-                rest_area_counts.append(type_counts.get('rest_area', 0))
-                truck_stop_counts.append(type_counts.get('truck_stop', 0))
-            else:
-                rest_area_counts.append(0)
-                truck_stop_counts.append(0)
-        
-        x = np.arange(len(scenarios))
-        width = 0.35
-        
-        bars1 = ax3.bar(x - width/2, rest_area_counts, width, label='Rest Areas', alpha=0.8, color='lightblue')
-        bars2 = ax3.bar(x + width/2, truck_stop_counts, width, label='Truck Stops', alpha=0.8, color='lightcoral')
-        
-        ax3.set_xlabel('Budget Scenario')
-        ax3.set_ylabel('Number of Facilities')
-        ax3.set_xticks(x)
-        ax3.set_xticklabels(scenarios)
-        ax3.legend()
-        ax3.grid(True, alpha=0.3, axis='y')
-        
-        # Add value labels on bars
-        for bars in [bars1, bars2]:
-            for bar in bars:
-                height = bar.get_height()
-                if height > 0:
-                    ax3.annotate(f'{int(height)}',
-                               xy=(bar.get_x() + bar.get_width() / 2, height),
-                               xytext=(0, 3), textcoords="offset points",
-                               ha='center', va='bottom')
-        
-        # Plot 4: Cost effectiveness comparison
-        ax4.set_title('Cost Effectiveness Evolution', fontsize=12, fontweight='bold')
-        
-        if len(current_results) > 0:
-            cost_eff_current = current_results['Cumulative_Capacity'] / (current_results['Cumulative_Budget'] / 1e6)
-            ax4.plot(current_results['Selection_Order'], cost_eff_current, 
-                    'b-o', linewidth=2.5, markersize=4, label='$175M Budget')
-        
-        if len(expanded_results) > 0:
-            cost_eff_expanded = expanded_results['Cumulative_Capacity'] / (expanded_results['Cumulative_Budget'] / 1e6)
-            ax4.plot(expanded_results['Selection_Order'], cost_eff_expanded, 
-                    'r-s', linewidth=2.5, markersize=4, label='$1B Budget')
-        
-        ax4.set_xlabel('Selection Order')
-        ax4.set_ylabel('Capacity per Million Dollars')
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        
-        # Save comparative plot
-        plot_file = os.path.join(figures_folder, "comparative_analysis.png")
-        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print(f"Comparative analysis plot saved to: {plot_file}")
-        
-    except Exception as e:
-        print(f"Error creating comparative analysis: {e}")
-
 if __name__ == "__main__":
-    main_diagnostic()
+    main()
